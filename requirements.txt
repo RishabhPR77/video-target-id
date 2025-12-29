@@ -1,0 +1,10 @@
+streamlit
+opencv-python-headless
+numpy
+pandas
+altair
+insightface
+onnxruntime
+scikit-learn
+tqdm
+Pillow
