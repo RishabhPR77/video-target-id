@@ -528,8 +528,8 @@ def render_target_step():
         for i, f in enumerate(files[:5]):
             img = safe_imdecode(f.getvalue())
             if img is not None:
-                # Updated to use_container_width for st 1.40.0
-                cols[i].image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
+                # Change 'use_container_width' to 'use_column_width'
+                cols[i].image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_column_width=True)
         st.session_state.target_files = files
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
