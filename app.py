@@ -1,11 +1,11 @@
-# app.py — Final Deployment Version (Enhanced)
+# app.py — Final Deployment Version (Enhanced + Memory Optimized)
 # ------------------------------------------------------------
 # Features:
-# ✅ Secure Login/Register System (Salted Hash)
-# ✅ Pro Glassmorphism UI with "Fantastic" Tabs
+# ✅ Secure Login/Register/Reset (Salted Hash)
+# ✅ Pro Glassmorphism UI with "Fantastic" Tabs & High Visibility Title
 # ✅ AI Video Analysis (Face + Pose) with Resolution Slider
 # ✅ PDF & CSV Reporting
-# ✅ Cloud-Ready (CPU Optimized)
+# ✅ Cloud-Ready (Memory Leak Protection & CPU Optimization)
 
 import os
 import io
@@ -15,6 +15,7 @@ import zipfile
 import tempfile
 import sqlite3
 import hashlib
+import gc  # <--- Crucial for preventing server crashes
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
@@ -83,7 +84,7 @@ def login_user(username, password):
     return data
 
 
-# --- NEW FUNCTIONS FOR PASSWORD RESET ---
+# --- PASSWORD RESET FUNCTIONS ---
 def verify_user(username, realname):
     """Verify if username exists and matches the registered full name."""
     conn = sqlite3.connect('users.db')
@@ -154,9 +155,11 @@ def inject_pro_ui():
             font-size: 32px !important;
             font-weight: 700;
             letter-spacing: -0.5px;
-            background: -webkit-linear-gradient(45deg, #60a5fa, #c084fc);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            /* NEW: Bright White with Text Shadow for visibility */
+            color: #ffffff !important;
+            text-shadow: 0 0 20px rgba(96, 165, 250, 0.5); 
+            background: none !important;
+            -webkit-text-fill-color: initial !important;
         }
 
         /* --- BUTTONS --- */
@@ -528,7 +531,7 @@ def render_target_step():
         for i, f in enumerate(files[:5]):
             img = safe_imdecode(f.getvalue())
             if img is not None:
-                # Change 'use_container_width' to 'use_column_width'
+                # FIX: use_column_width for older Streamlit versions (or compatibility mode)
                 cols[i].image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_column_width=True)
         st.session_state.target_files = files
 
@@ -670,6 +673,7 @@ def render_scan_step():
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+# --- MEMORY OPTIMIZED RUN_ANALYSIS ---
 def run_analysis():
     app = load_face_engine()
     st.markdown('<div class="glass">', unsafe_allow_html=True)
@@ -681,12 +685,13 @@ def run_analysis():
 
     all_events = []
 
-    # Determine target width
+    # DETERMINE TARGET WIDTH
+    # Safety: We cap "Native" at 1280px to prevent 4K/8K memory crashes on free cloud tiers
     target_width = 320
     if "640" in st.session_state.process_width:
         target_width = 640
     elif "Native" in st.session_state.process_width:
-        target_width = None
+        target_width = 1280
 
     for v_idx, video_path in enumerate(st.session_state.video_files):
         video_name = st.session_state.video_names[v_idx]
@@ -703,22 +708,21 @@ def run_analysis():
             ok, frame = cap.read()
             if not ok: break
 
+            # 1. Skip Frames Logic
             if st.session_state.skip_frames > 0 and (frame_i % (st.session_state.skip_frames + 1) != 0):
                 frame_i += 1
                 continue
 
             h, w = frame.shape[:2]
 
-            # Smart Resize
-            if target_width:
+            # 2. Smart Resize (Crucial for Memory)
+            if target_width and w > target_width:
                 scale = target_width / float(w)
-                if scale < 1.0:
-                    frame_small = cv2.resize(frame, (target_width, int(h * scale)))
-                else:
-                    frame_small = frame
+                frame_small = cv2.resize(frame, (target_width, int(h * scale)))
             else:
                 frame_small = frame
 
+            # 3. Face Analysis
             faces = get_faces(frame_small, app)
             face_score = 0.0
 
@@ -729,12 +733,14 @@ def run_analysis():
                 except:
                     face_score = 0.0
 
+            # 4. Pose Analysis
             pose_score = 0.0
             if st.session_state.ref_pose is not None:
                 p = extract_pose_feats_bgr(frame_small)
                 if p is not None:
                     pose_score = cosine_sim_np(p, st.session_state.ref_pose)
 
+            # 5. Fusion & Detection
             fused = (st.session_state.face_weight * face_score) + (st.session_state.pose_weight * pose_score)
 
             if fused >= st.session_state.threshold:
@@ -766,15 +772,22 @@ def run_analysis():
                     preview_box.image(cv2.cvtColor(evidence_frame, cv2.COLOR_BGR2RGB),
                                       caption=f"Match Found: {fmt_time(t_sec)}")
 
-            if total_frames > 0:
+            # 6. Optimized Progress Update (Only every 10 frames to save CPU)
+            if total_frames > 0 and frame_i % 10 == 0:
                 prog_bar.progress(min(1.0, frame_i / total_frames))
+
             frame_i += 1
 
-            # Memory Cleanup
-            del frame_small
+            # 7. Aggressive Memory Cleanup
             del frame
+            if 'frame_small' in locals(): del frame_small
+
+            # Force Garbage Collection every 50 frames
+            if frame_i % 50 == 0:
+                gc.collect()
 
         cap.release()
+        gc.collect()  # Final sweep
 
     # Final Cleanup
     prog_bar.empty()
@@ -833,6 +846,7 @@ def render_results_step():
                     st.caption(f"Conf: {row['Best Confidence']:.2f}")
                 with c2:
                     if row['Screenshot'] and os.path.exists(row['Screenshot']):
+                        # Compatibility fix
                         st.image(row['Screenshot'], width=250)
                     else:
                         st.warning("No Image")
