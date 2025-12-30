@@ -1,12 +1,11 @@
-# app.py — Final Deployment Version (Enhanced Guide)
+# app.py — Final Deployment Version (Enhanced)
 # ------------------------------------------------------------
 # Features:
-# ✅ Secure Login/Register System (SQLite)
-# ✅ Pro Glassmorphism UI with "Outfit" Font
-# ✅ AI Video Analysis (Face + Pose)
-# ✅ Auto-Screenshot with Bounding Box Highlighting
+# ✅ Secure Login/Register System (Salted Hash)
+# ✅ Pro Glassmorphism UI with "Fantastic" Tabs
+# ✅ AI Video Analysis (Face + Pose) with Resolution Slider
+# ✅ PDF & CSV Reporting
 # ✅ Cloud-Ready (CPU Optimized)
-# ✅ Detailed Performance Guide (4 Tiers)
 
 import os
 import io
@@ -24,6 +23,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import altair as alt
+from fpdf import FPDF
 
 from face_module import init_face_app, get_faces, mean_normalize_stack, cosine_sim
 from pose_module import extract_pose_feats_bgr
@@ -42,11 +42,14 @@ st.set_page_config(
 # 2. Database & Auth Functions
 # ----------------------------
 def make_hashes(password):
-    return hashlib.sha256(str.encode(password)).hexdigest()
+    # Salt added for security
+    salt = "forensic_secure_salt_8392"
+    return hashlib.sha256(str.encode(password + salt)).hexdigest()
 
 
 def check_hashes(password, hashed_text):
-    if make_hashes(password) == hashed_text:
+    salt = "forensic_secure_salt_8392"
+    if hashlib.sha256(str.encode(password + salt)).hexdigest() == hashed_text:
         return True
     return False
 
@@ -54,7 +57,6 @@ def check_hashes(password, hashed_text):
 def create_usertable():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    # Schema includes name
     c.execute('CREATE TABLE IF NOT EXISTS userstable(username TEXT PRIMARY KEY, password TEXT, name TEXT)')
     conn.commit()
     conn.close()
@@ -105,6 +107,7 @@ def inject_pro_ui():
             border-right: 1px solid rgba(255,255,255,0.05);
         }
 
+        /* --- GLASSMORPHISM CARDS --- */
         .glass {
             background: rgba(30, 41, 59, 0.4);
             border: 1px solid rgba(255, 255, 255, 0.08);
@@ -115,6 +118,7 @@ def inject_pro_ui():
             margin-bottom: 20px;
         }
 
+        /* --- TOP BAR --- */
         .topbar {
             display: flex;
             align-items: center;
@@ -137,16 +141,7 @@ def inject_pro_ui():
             -webkit-text-fill-color: transparent;
         }
 
-        .kpi {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.05);
-            border-radius: 12px;
-            padding: 16px;
-            text-align: center;
-        }
-        .kpi-title { font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
-        .kpi-val { font-size: 24px; font-weight: 700; color: #f1f5f9; margin-top: 4px; }
-
+        /* --- BUTTONS --- */
         .stButton>button {
             width: 100%;
             border-radius: 8px !important;
@@ -162,12 +157,45 @@ def inject_pro_ui():
             box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
         }
 
-        .pill {
-            padding: 6px 16px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 500;
+        /* --- FANTASTIC TABS UI --- */
+
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+            background-color: transparent;
+            padding-bottom: 10px;
         }
+
+        .stTabs [data-baseweb="tab"] {
+            height: 45px;
+            background-color: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            color: #94a3b8;
+            font-weight: 500;
+            padding: 0 20px;
+            transition: all 0.3s ease;
+        }
+
+        .stTabs [data-baseweb="tab"]:hover {
+            background-color: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.2);
+            color: #f8fafc;
+        }
+
+        .stTabs [aria-selected="true"] {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(147, 51, 234, 0.15) 100%) !important;
+            border: 1px solid rgba(139, 92, 246, 0.4) !important;
+            color: #e2e8f0 !important;
+            font-weight: 600 !important;
+            box-shadow: 0 0 15px rgba(139, 92, 246, 0.1);
+        }
+
+        .stTabs [data-baseweb="tab-highlight"] {
+            display: none;
+        }
+
+        /* --- PILLS & UTILS --- */
+        .pill { padding: 6px 16px; border-radius: 20px; font-size: 14px; font-weight: 500; }
         .pill.ok { background: rgba(34, 197, 94, 0.1); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.2); }
         .pill.warn { background: rgba(234, 179, 8, 0.1); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.2); }
         .pill.info { background: rgba(59, 130, 246, 0.1); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.2); }
@@ -215,6 +243,39 @@ def cosine_sim_np(a: np.ndarray, b: np.ndarray) -> float:
 def pick_best_face(faces: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not faces: return None
     return sorted(faces, key=lambda f: (f['bbox'][2] - f['bbox'][0]) * (f['bbox'][3] - f['bbox'][1]), reverse=True)[0]
+
+
+def generate_pdf_report(df, case_name):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(200, 10, txt=f"Forensic Video Analysis Report", ln=True, align='C')
+
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt=f"Case: {case_name}", ln=True, align='L')
+    pdf.cell(200, 10, txt=f"Date: {time.strftime('%Y-%m-%d %H:%M')}", ln=True, align='L')
+    pdf.ln(10)
+
+    # Table Header
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(40, 10, "Video File", 1)
+    pdf.cell(30, 10, "Timestamp", 1)
+    pdf.cell(30, 10, "Confidence", 1)
+    pdf.cell(90, 10, "Notes", 1)
+    pdf.ln()
+
+    # Rows
+    pdf.set_font("Arial", size=10)
+    for index, row in df.iterrows():
+        # Shorten video name
+        vid_name = (row['Video'][:15] + '..') if len(row['Video']) > 15 else row['Video']
+        pdf.cell(40, 10, vid_name, 1)
+        pdf.cell(30, 10, row['Start Time'], 1)
+        pdf.cell(30, 10, f"{row['Best Confidence']:.2f}", 1)
+        pdf.cell(90, 10, "Match confirmed via AI scan", 1)
+        pdf.ln()
+
+    return pdf.output(dest='S').encode('latin-1')
 
 
 @dataclass
@@ -296,8 +357,9 @@ if 'screens_dir' not in st.session_state:
 if 'start_time_player' not in st.session_state: st.session_state.start_time_player = 0
 if 'active_video_for_player' not in st.session_state: st.session_state.active_video_for_player = ""
 
-if 'threshold' not in st.session_state: st.session_state.threshold = 0.50
+if 'threshold' not in st.session_state: st.session_state.threshold = 0.60  # Raised default
 if 'skip_frames' not in st.session_state: st.session_state.skip_frames = 5
+if 'process_width' not in st.session_state: st.session_state.process_width = "Medium (640px)"
 if 'face_weight' not in st.session_state: st.session_state.face_weight = 0.7
 if 'pose_weight' not in st.session_state: st.session_state.pose_weight = 0.3
 if 'consent_ok' not in st.session_state: st.session_state.consent_ok = False
@@ -418,6 +480,7 @@ def render_target_step():
         for i, f in enumerate(files[:5]):
             img = safe_imdecode(f.getvalue())
             if img is not None:
+                # Updated to use_container_width for st 1.40.0
                 cols[i].image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
         st.session_state.target_files = files
 
@@ -539,6 +602,14 @@ def render_scan_step():
 
     st.session_state.skip_frames = st.slider("Frame Skipping", 0, 60, 5)
 
+    # NEW: Resolution Slider
+    processing_quality = st.select_slider(
+        "Scan Resolution (Higher = Slower but more accurate)",
+        options=["Low (320px)", "Medium (640px)", "High (Native)"],
+        value="Medium (640px)"
+    )
+    st.session_state.process_width = processing_quality
+
     st.markdown("---")
     col1, col2 = st.columns([1, 3])
     with col1:
@@ -561,7 +632,13 @@ def run_analysis():
     preview_box = st.empty()
 
     all_events = []
-    RESIZE_WIDTH = 320
+
+    # Determine target width
+    target_width = 320
+    if "640" in st.session_state.process_width:
+        target_width = 640
+    elif "Native" in st.session_state.process_width:
+        target_width = None
 
     for v_idx, video_path in enumerate(st.session_state.video_files):
         video_name = st.session_state.video_names[v_idx]
@@ -583,8 +660,16 @@ def run_analysis():
                 continue
 
             h, w = frame.shape[:2]
-            scale = RESIZE_WIDTH / float(w)
-            frame_small = cv2.resize(frame, (RESIZE_WIDTH, int(h * scale)))
+
+            # Smart Resize
+            if target_width:
+                scale = target_width / float(w)
+                if scale < 1.0:
+                    frame_small = cv2.resize(frame, (target_width, int(h * scale)))
+                else:
+                    frame_small = frame
+            else:
+                frame_small = frame
 
             faces = get_faces(frame_small, app)
             face_score = 0.0
@@ -637,7 +722,17 @@ def run_analysis():
                 prog_bar.progress(min(1.0, frame_i / total_frames))
             frame_i += 1
 
+            # Memory Cleanup
+            del frame_small
+            del frame
+
         cap.release()
+
+    # Final Cleanup
+    prog_bar.empty()
+    status_text.success("Analysis Complete")
+    time.sleep(1)
+    preview_box.empty()
 
     st.session_state.raw_events = all_events
     st.session_state.timeline_df = group_events(all_events)
@@ -661,73 +756,102 @@ def render_results_step():
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
+    # Top Level Metrics
     m1, m2 = st.columns(2)
     m1.metric("Total Matches", len(df))
     m2.metric("Highest Confidence", f"{df['Best Confidence'].max():.0%}")
 
     st.markdown("---")
 
-    # --- Improved Graph: Area Chart ---
-    st.markdown("#### Confidence Timeline")
-    chart_data = df.copy()
-    chart_data["Seconds"] = chart_data["Start (sec)"]
+    # ---------------------------------------------------------
+    # TABS UI
+    # ---------------------------------------------------------
+    tab_list, tab_graph, tab_data = st.tabs(["View Match Details", "View Confidence Graph", "View Raw Data"])
 
-    c = alt.Chart(chart_data).mark_area(
-        line={'color': '#4ade80'},
-        color=alt.Gradient(
-            gradient='linear',
-            stops=[alt.GradientStop(color='#4ade80', offset=0),
-                   alt.GradientStop(color='rgba(74, 222, 128, 0.1)', offset=1)],
-            x1=1, x2=1, y1=1, y2=0
+    # 1. MATCH DETAILS VIEW
+    with tab_list:
+        st.markdown("#### Match Timeline")
+        for i, row in df.iterrows():
+            with st.container():
+                st.markdown(
+                    """
+                    <div style="background:rgba(255,255,255,0.05); padding:10px; border-radius:8px; margin-bottom:10px;">
+                    """, unsafe_allow_html=True
+                )
+                c1, c2, c3 = st.columns([1, 2, 1])
+                with c1:
+                    st.markdown(f"**Match #{i + 1}**")
+                    st.caption(f"Time: {row['Start Time']}")
+                    st.caption(f"Conf: {row['Best Confidence']:.2f}")
+                with c2:
+                    if row['Screenshot'] and os.path.exists(row['Screenshot']):
+                        st.image(row['Screenshot'], width=250)
+                    else:
+                        st.warning("No Image")
+                with c3:
+                    # UPDATED BUTTON LABEL HERE
+                    btn_label = f"▶ Play Video at {row['Start Time']}"
+                    if st.button(btn_label, key=f"play_{i}"):
+                        st.session_state.start_time_player = int(row['Start (sec)'])
+                        st.session_state.active_video_for_player = row['Video']
+                        st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+
+    # 2. GRAPH VIEW
+    with tab_graph:
+        st.markdown("#### Confidence Timeline")
+        chart_data = df.copy()
+        chart_data["Seconds"] = chart_data["Start (sec)"]
+
+        c = alt.Chart(chart_data).mark_area(
+            line={'color': '#4ade80'},
+            color=alt.Gradient(
+                gradient='linear',
+                stops=[alt.GradientStop(color='#4ade80', offset=0),
+                       alt.GradientStop(color='rgba(74, 222, 128, 0.1)', offset=1)],
+                x1=1, x2=1, y1=1, y2=0
+            )
+        ).encode(
+            x=alt.X('Seconds', axis=alt.Axis(title='Video Time (sec)')),
+            y=alt.Y('Best Confidence', scale=alt.Scale(domain=[0, 1])),
+            tooltip=['Start Time', 'Duration', 'Best Confidence']
+        ).interactive()
+
+        points = alt.Chart(chart_data).mark_circle(size=80, color='white').encode(
+            x='Seconds',
+            y='Best Confidence',
+            tooltip=['Start Time', 'Best Confidence']
         )
-    ).encode(
-        x=alt.X('Seconds', axis=alt.Axis(title='Video Time (sec)')),
-        y=alt.Y('Best Confidence', scale=alt.Scale(domain=[0, 1])),
-        tooltip=['Start Time', 'Duration', 'Best Confidence']
-    ).interactive()
 
-    points = alt.Chart(chart_data).mark_circle(size=80, color='white').encode(
-        x='Seconds',
-        y='Best Confidence',
-        tooltip=['Start Time', 'Best Confidence']
-    )
+        st.altair_chart(c + points, use_container_width=True)
 
-    st.altair_chart(c + points, use_container_width=True)
+    # 3. RAW DATA VIEW
+    with tab_data:
+        st.markdown("#### Data Table")
+        st.dataframe(df, use_container_width=True)
 
     st.markdown("---")
 
-    for i, row in df.iterrows():
-        with st.container():
-            c1, c2, c3 = st.columns([1, 2, 1])
-            with c1:
-                st.markdown(f"#### Match #{i + 1}")
-                st.write(f"**Time:** {row['Start Time']}")
-                st.write(f"**Conf:** {row['Best Confidence']:.2f}")
-            with c2:
-                if row['Screenshot'] and os.path.exists(row['Screenshot']):
-                    st.image(row['Screenshot'], width=300)
-            with c3:
-                # Explicit Button
-                if st.button(f"▶ Jump to {row['Start Time']}", key=f"play_{i}"):
-                    st.session_state.start_time_player = int(row['Start (sec)'])
-                    st.session_state.active_video_for_player = row['Video']
-                    st.rerun()
-            st.divider()
-
-    cols = st.columns(2)
+    # Downloads
+    cols = st.columns(3)
     with cols[0]:
         csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("Download CSV", csv, "report.csv", "text/csv")
+        st.download_button("Download CSV Report", csv, "report.csv", "text/csv")
     with cols[1]:
         img_paths = [row['Screenshot'] for _, row in df.iterrows() if row['Screenshot']]
         zip_data = make_zip_of_screenshots(img_paths)
-        st.download_button("Download ZIP", zip_data, "evidence.zip", "application/zip")
+        st.download_button("Download Evidence ZIP", zip_data, "evidence.zip", "application/zip")
+    with cols[2]:
+        pdf_data = generate_pdf_report(df, st.session_state.case_name)
+        st.download_button("Download PDF Report", pdf_data, "forensic_report.pdf", "application/pdf")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
     if st.session_state.start_time_player > 0:
         st.markdown('<div class="glass">', unsafe_allow_html=True)
-        st.subheader("📺 Video Playback")
+        st.subheader(
+            f"Playback: {st.session_state.active_video_for_player} @ {fmt_time(st.session_state.start_time_player)}")
+
         vid_path = None
         if st.session_state.active_video_for_player in st.session_state.video_names:
             idx = st.session_state.video_names.index(st.session_state.active_video_for_player)
@@ -736,11 +860,17 @@ def render_results_step():
             vid_path = st.session_state.single_video_path
 
         if vid_path:
-            # Unique key forces player reload
             st.video(vid_path, start_time=st.session_state.start_time_player)
+        else:
+            st.error("Video file not found in session.")
+
+        if st.button("Close Player"):
+            st.session_state.start_time_player = 0
+            st.rerun()
+
         st.markdown('</div>', unsafe_allow_html=True)
 
-    if st.button("New Analysis"):
+    if st.button("Start New Analysis"):
         st.session_state.step = 1
         st.rerun()
 

@@ -10,3 +10,4 @@ protobuf==4.25.3
 scikit-learn
 tqdm
 Pillow
+fpdf
