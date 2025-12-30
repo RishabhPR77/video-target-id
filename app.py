@@ -42,7 +42,6 @@ st.set_page_config(
 # 2. Database & Auth Functions
 # ----------------------------
 def make_hashes(password):
-    # Salt added for security
     salt = "forensic_secure_salt_8392"
     return hashlib.sha256(str.encode(password + salt)).hexdigest()
 
@@ -82,6 +81,25 @@ def login_user(username, password):
     data = c.fetchall()
     conn.close()
     return data
+
+
+# --- NEW FUNCTIONS FOR PASSWORD RESET ---
+def verify_user(username, realname):
+    """Verify if username exists and matches the registered full name."""
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute('SELECT * FROM userstable WHERE username =? AND name = ?', (username, realname))
+    data = c.fetchall()
+    conn.close()
+    return len(data) > 0
+
+def update_password(username, new_password):
+    """Update the password for a verified user."""
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute('UPDATE userstable SET password =? WHERE username =?', (make_hashes(new_password), username))
+    conn.commit()
+    conn.close()
 
 
 # ----------------------------
@@ -382,8 +400,10 @@ def login_screen():
             unsafe_allow_html=True
         )
 
-        tab_login, tab_reg = st.tabs(["Login", "Create Account"])
+        # Added "Reset Password" tab
+        tab_login, tab_reg, tab_reset = st.tabs(["Login", "Create Account", "Reset Password"])
 
+        # --- LOGIN TAB ---
         with tab_login:
             st.markdown("<div class='glass'>", unsafe_allow_html=True)
             username = st.text_input("Username", key="login_user")
@@ -402,6 +422,7 @@ def login_screen():
                     st.error("Incorrect Username/Password")
             st.markdown("</div>", unsafe_allow_html=True)
 
+        # --- REGISTER TAB ---
         with tab_reg:
             st.markdown("<div class='glass'>", unsafe_allow_html=True)
             new_name = st.text_input("Full Name", key="reg_name")
@@ -422,6 +443,33 @@ def login_screen():
                         st.error("Username already exists.")
             st.markdown("</div>", unsafe_allow_html=True)
 
+        # --- RESET PASSWORD TAB (NEW) ---
+        with tab_reset:
+            st.markdown("<div class='glass'>", unsafe_allow_html=True)
+            st.caption("Verify your identity to reset password")
+
+            reset_user = st.text_input("Username", key="reset_user")
+            reset_name = st.text_input("Full Name (as registered)", key="reset_name")
+
+            new_pass = st.text_input("New Password", type='password', key="reset_new_pass")
+            conf_pass = st.text_input("Confirm New Password", type='password', key="reset_conf_pass")
+
+            if st.button("Update Password"):
+                if not reset_user or not reset_name:
+                    st.error("Please provide Username and Full Name.")
+                elif new_pass != conf_pass:
+                    st.error("New passwords do not match.")
+                elif not new_pass:
+                    st.error("Password cannot be empty.")
+                else:
+                    # Check if user exists and name matches
+                    if verify_user(reset_user, reset_name):
+                        update_password(reset_user, new_pass)
+                        st.success("Password updated successfully! You can now log in.")
+                    else:
+                        st.error("Verification failed. Username or Full Name is incorrect.")
+
+            st.markdown("</div>", unsafe_allow_html=True)
 
 # ----------------------------
 # 7. Main Application Logic
