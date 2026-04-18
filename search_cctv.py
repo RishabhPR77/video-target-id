@@ -9,7 +9,7 @@ OUT_CSV = "outputs/detections.csv"
 
 FACE_THR = 0.42
 FUSED_THR = 0.48
-W_FACE, W_GAIT, W_POST = 0.7, 0.2, 0.1
+W_FACE, W_POSE = 0.7, 0.3   # must sum to 1.0
 CONSEC = 3               # require N consecutive frames to mitigate false alarms
 FRAME_STRIDE = 3         # analyze every Nth frame for speed
 
@@ -53,7 +53,7 @@ def run_on_video(video_path, app, ref_face, ref_pose, writer):
         pose = extract_pose_feats_bgr(frame)
         pose_score = sim_pose(pose, ref_pose) if (pose is not None and ref_pose is not None) else 0.0
 
-        fused = W_FACE*face_score + W_GAIT*pose_score + W_POST*pose_score  # simple reuse pose for posture
+        fused = W_FACE*face_score + W_POSE*pose_score
         hit = (face_score >= FACE_THR) and (fused >= FUSED_THR)
 
         if hit:

@@ -1,7 +1,6 @@
 # app.py — Final Deployment Version (Enhanced + Memory Optimized)
 # ------------------------------------------------------------
 # Features:
-# ✅ Secure Login/Register/Reset (Salted Hash)
 # ✅ Pro Glassmorphism UI with "Fantastic" Tabs & High Visibility Title
 # ✅ AI Video Analysis (Face + Pose) with Resolution Slider
 # ✅ PDF & CSV Reporting
@@ -10,11 +9,8 @@
 import os
 import io
 import time
-import base64
 import zipfile
 import tempfile
-import sqlite3
-import hashlib
 import gc  # <--- Crucial for preventing server crashes
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
@@ -40,71 +36,7 @@ st.set_page_config(
 
 
 # ----------------------------
-# 2. Database & Auth Functions
-# ----------------------------
-def make_hashes(password):
-    salt = "forensic_secure_salt_8392"
-    return hashlib.sha256(str.encode(password + salt)).hexdigest()
-
-
-def check_hashes(password, hashed_text):
-    salt = "forensic_secure_salt_8392"
-    if hashlib.sha256(str.encode(password + salt)).hexdigest() == hashed_text:
-        return True
-    return False
-
-
-def create_usertable():
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute('CREATE TABLE IF NOT EXISTS userstable(username TEXT PRIMARY KEY, password TEXT, name TEXT)')
-    conn.commit()
-    conn.close()
-
-
-def add_userdata(username, password, name):
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    try:
-        c.execute('INSERT INTO userstable(username,password,name) VALUES (?,?,?)', (username, password, name))
-        conn.commit()
-        success = True
-    except sqlite3.IntegrityError:
-        success = False
-    conn.close()
-    return success
-
-
-def login_user(username, password):
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute('SELECT * FROM userstable WHERE username =? AND password = ?', (username, password))
-    data = c.fetchall()
-    conn.close()
-    return data
-
-
-# --- PASSWORD RESET FUNCTIONS ---
-def verify_user(username, realname):
-    """Verify if username exists and matches the registered full name."""
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute('SELECT * FROM userstable WHERE username =? AND name = ?', (username, realname))
-    data = c.fetchall()
-    conn.close()
-    return len(data) > 0
-
-def update_password(username, new_password):
-    """Update the password for a verified user."""
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute('UPDATE userstable SET password =? WHERE username =?', (make_hashes(new_password), username))
-    conn.commit()
-    conn.close()
-
-
-# ----------------------------
-# 3. Custom CSS (Premium UI)
+# 2. Custom CSS (Premium UI)
 # ----------------------------
 def inject_pro_ui():
     st.markdown(
@@ -155,9 +87,8 @@ def inject_pro_ui():
             font-size: 32px !important;
             font-weight: 700;
             letter-spacing: -0.5px;
-            /* NEW: Bright White with Text Shadow for visibility */
             color: #ffffff !important;
-            text-shadow: 0 0 20px rgba(96, 165, 250, 0.5); 
+            text-shadow: 0 0 20px rgba(96, 165, 250, 0.5);
             background: none !important;
             -webkit-text-fill-color: initial !important;
         }
@@ -179,7 +110,6 @@ def inject_pro_ui():
         }
 
         /* --- FANTASTIC TABS UI --- */
-
         .stTabs [data-baseweb="tab-list"] {
             gap: 8px;
             background-color: transparent;
@@ -231,7 +161,7 @@ def inject_pro_ui():
 
 
 # ----------------------------
-# 4. Helper Functions
+# 3. Helper Functions
 # ----------------------------
 def ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
@@ -270,14 +200,13 @@ def generate_pdf_report(df, case_name):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, txt=f"Forensic Video Analysis Report", ln=True, align='C')
+    pdf.cell(200, 10, txt="Forensic Video Analysis Report", ln=True, align='C')
 
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt=f"Case: {case_name}", ln=True, align='L')
     pdf.cell(200, 10, txt=f"Date: {time.strftime('%Y-%m-%d %H:%M')}", ln=True, align='L')
     pdf.ln(10)
 
-    # Table Header
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(40, 10, "Video File", 1)
     pdf.cell(30, 10, "Timestamp", 1)
@@ -285,10 +214,8 @@ def generate_pdf_report(df, case_name):
     pdf.cell(90, 10, "Notes", 1)
     pdf.ln()
 
-    # Rows
     pdf.set_font("Arial", size=10)
     for index, row in df.iterrows():
-        # Shorten video name
         vid_name = (row['Video'][:15] + '..') if len(row['Video']) > 15 else row['Video']
         pdf.cell(40, 10, vid_name, 1)
         pdf.cell(30, 10, row['Start Time'], 1)
@@ -296,7 +223,9 @@ def generate_pdf_report(df, case_name):
         pdf.cell(90, 10, "Match confirmed via AI scan", 1)
         pdf.ln()
 
-    return pdf.output(dest='S').encode('latin-1')
+    # fpdf2 returns bytes directly; legacy fpdf returns str
+    raw = pdf.output(dest='S')
+    return raw if isinstance(raw, bytes) else raw.encode('latin-1')
 
 
 @dataclass
@@ -358,11 +287,8 @@ def load_face_engine():
 
 
 # ----------------------------
-# 5. Session State Init
+# 4. Session State Init
 # ----------------------------
-if 'logged_in' not in st.session_state: st.session_state.logged_in = False
-if 'username' not in st.session_state: st.session_state.username = ""
-if 'realname' not in st.session_state: st.session_state.realname = ""
 if 'step' not in st.session_state: st.session_state.step = 1
 if 'case_name' not in st.session_state: st.session_state.case_name = "New Investigation"
 if 'target_files' not in st.session_state: st.session_state.target_files = []
@@ -377,8 +303,7 @@ if 'screens_dir' not in st.session_state:
     st.session_state.screens_dir = ensure_dir(os.path.join(tempfile.gettempdir(), "target_id_screens"))
 if 'start_time_player' not in st.session_state: st.session_state.start_time_player = 0
 if 'active_video_for_player' not in st.session_state: st.session_state.active_video_for_player = ""
-
-if 'threshold' not in st.session_state: st.session_state.threshold = 0.60  # Raised default
+if 'threshold' not in st.session_state: st.session_state.threshold = 0.60
 if 'skip_frames' not in st.session_state: st.session_state.skip_frames = 5
 if 'process_width' not in st.session_state: st.session_state.process_width = "Medium (640px)"
 if 'face_weight' not in st.session_state: st.session_state.face_weight = 0.7
@@ -387,107 +312,14 @@ if 'consent_ok' not in st.session_state: st.session_state.consent_ok = False
 
 
 # ----------------------------
-# 6. Auth Screens
-# ----------------------------
-def login_screen():
-    st.markdown("<div style='height: 50px'></div>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown(
-            """
-            <div class='glass' style='text-align: center;'>
-                <h1 style='color: #60a5fa; margin-bottom: 10px; font-size: 32px;'>Video Target ID</h1>
-                <p style='color: #94a3b8;'>Secure Forensic Analysis Platform</p>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        # Added "Reset Password" tab
-        tab_login, tab_reg, tab_reset = st.tabs(["Login", "Create Account", "Reset Password"])
-
-        # --- LOGIN TAB ---
-        with tab_login:
-            st.markdown("<div class='glass'>", unsafe_allow_html=True)
-            username = st.text_input("Username", key="login_user")
-            password = st.text_input("Password", type='password', key="login_pass")
-            if st.button("Log In"):
-                create_usertable()
-                hashed_pswd = make_hashes(password)
-                result = login_user(username, hashed_pswd)
-                if result:
-                    st.session_state.logged_in = True
-                    st.session_state.username = username
-                    st.session_state.realname = result[0][2]
-                    st.success(f"Welcome back, {st.session_state.realname}")
-                    st.rerun()
-                else:
-                    st.error("Incorrect Username/Password")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        # --- REGISTER TAB ---
-        with tab_reg:
-            st.markdown("<div class='glass'>", unsafe_allow_html=True)
-            new_name = st.text_input("Full Name", key="reg_name")
-            new_user = st.text_input("New Username", key="reg_user")
-            new_password = st.text_input("New Password", type='password', key="reg_pass")
-            confirm_password = st.text_input("Confirm Password", type='password', key="reg_conf")
-
-            if st.button("Create Account"):
-                if new_password != confirm_password:
-                    st.error("Passwords do not match")
-                elif not new_user or not new_password or not new_name:
-                    st.error("Please fill all fields")
-                else:
-                    create_usertable()
-                    if add_userdata(new_user, make_hashes(new_password), new_name):
-                        st.success("Account created! Please log in.")
-                    else:
-                        st.error("Username already exists.")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        # --- RESET PASSWORD TAB (NEW) ---
-        with tab_reset:
-            st.markdown("<div class='glass'>", unsafe_allow_html=True)
-            st.caption("Verify your identity to reset password")
-
-            reset_user = st.text_input("Username", key="reset_user")
-            reset_name = st.text_input("Full Name (as registered)", key="reset_name")
-
-            new_pass = st.text_input("New Password", type='password', key="reset_new_pass")
-            conf_pass = st.text_input("Confirm New Password", type='password', key="reset_conf_pass")
-
-            if st.button("Update Password"):
-                if not reset_user or not reset_name:
-                    st.error("Please provide Username and Full Name.")
-                elif new_pass != conf_pass:
-                    st.error("New passwords do not match.")
-                elif not new_pass:
-                    st.error("Password cannot be empty.")
-                else:
-                    # Check if user exists and name matches
-                    if verify_user(reset_user, reset_name):
-                        update_password(reset_user, new_pass)
-                        st.success("Password updated successfully! You can now log in.")
-                    else:
-                        st.error("Verification failed. Username or Full Name is incorrect.")
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-# ----------------------------
-# 7. Main Application Logic
+# 5. Main Application
 # ----------------------------
 def main_app():
     st.markdown(
-        f"""
+        """
         <div class="topbar">
-            <div class="brand">
-                <h1>Video Target Identification</h1>
-            </div>
-            <div style="display:flex; align-items:center; gap:10px;">
-                <span class="pill info">👤 {st.session_state.realname}</span>
-                <span class="pill ok">Online</span>
-            </div>
+            <div class="brand"><h1>Video Target Identification</h1></div>
+            <div><span class="pill ok">Online</span></div>
         </div>
         """,
         unsafe_allow_html=True
@@ -503,9 +335,10 @@ def main_app():
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("---")
-        if st.button("Logout"):
-            st.session_state.logged_in = False
-            st.rerun()
+        st.markdown("### Detection Weights")
+        st.session_state.face_weight = st.slider("Face Weight", 0.0, 1.0, st.session_state.face_weight, 0.05)
+        st.session_state.pose_weight = round(1.0 - st.session_state.face_weight, 2)
+        st.caption(f"Pose Weight: **{st.session_state.pose_weight}** (auto)")
 
     if st.session_state.step == 1:
         render_target_step()
@@ -522,8 +355,8 @@ def render_target_step():
     st.subheader("Step 1: Who to find?")
     st.info("Upload 1-3 clear reference photos of the target person.")
 
-    files = st.file_uploader("Drop images here (JPG/PNG)", type=['jpg', 'png', 'jpeg'], accept_multiple_files=True,
-                             key="ref_uploader")
+    files = st.file_uploader("Drop images here (JPG/PNG)", type=['jpg', 'png', 'jpeg'],
+                             accept_multiple_files=True, key="ref_uploader")
 
     if files:
         st.write("#### Preview")
@@ -531,8 +364,7 @@ def render_target_step():
         for i, f in enumerate(files[:5]):
             img = safe_imdecode(f.getvalue())
             if img is not None:
-                # FIX: use_column_width for older Streamlit versions (or compatibility mode)
-                cols[i].image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_column_width=True)
+                cols[i].image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
         st.session_state.target_files = files
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
@@ -602,8 +434,8 @@ def render_source_step():
     st.subheader("Step 2: Where to look?")
     st.info("Upload the surveillance video file(s) you want to analyze.")
 
-    uploaded = st.file_uploader("Upload Video File (MP4/AVI)", type=['mp4', 'avi', 'mov', 'mkv'],
-                                accept_multiple_files=True)
+    uploaded = st.file_uploader("Upload Video File (MP4/AVI/MOV/MKV)",
+                                type=['mp4', 'avi', 'mov', 'mkv'], accept_multiple_files=True)
 
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -636,7 +468,6 @@ def render_scan_step():
     st.markdown('<div class="glass">', unsafe_allow_html=True)
     st.subheader("Step 3: AI Deep Scan")
 
-    # --- UPDATED PERFORMANCE GUIDE TABLE ---
     with st.expander("ℹ️ Performance Guide (Important)"):
         st.markdown("""
         **Adjust Frame Skipping based on your video length:**
@@ -653,7 +484,6 @@ def render_scan_step():
 
     st.session_state.skip_frames = st.slider("Frame Skipping", 0, 60, 5)
 
-    # NEW: Resolution Slider
     processing_quality = st.select_slider(
         "Scan Resolution (Higher = Slower but more accurate)",
         options=["Low (320px)", "Medium (640px)", "High (Native)"],
@@ -685,8 +515,7 @@ def run_analysis():
 
     all_events = []
 
-    # DETERMINE TARGET WIDTH
-    # Safety: We cap "Native" at 1280px to prevent 4K/8K memory crashes on free cloud tiers
+    # Cap "Native" at 1280px to prevent 4K/8K memory crashes on free cloud tiers
     target_width = 320
     if "640" in st.session_state.process_width:
         target_width = 640
@@ -817,27 +646,21 @@ def render_results_step():
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
-    # Top Level Metrics
     m1, m2 = st.columns(2)
     m1.metric("Total Matches", len(df))
     m2.metric("Highest Confidence", f"{df['Best Confidence'].max():.0%}")
 
     st.markdown("---")
 
-    # ---------------------------------------------------------
-    # TABS UI
-    # ---------------------------------------------------------
     tab_list, tab_graph, tab_data = st.tabs(["View Match Details", "View Confidence Graph", "View Raw Data"])
 
-    # 1. MATCH DETAILS VIEW
     with tab_list:
         st.markdown("#### Match Timeline")
         for i, row in df.iterrows():
             with st.container():
                 st.markdown(
-                    """
-                    <div style="background:rgba(255,255,255,0.05); padding:10px; border-radius:8px; margin-bottom:10px;">
-                    """, unsafe_allow_html=True
+                    """<div style="background:rgba(255,255,255,0.05); padding:10px; border-radius:8px; margin-bottom:10px;">""",
+                    unsafe_allow_html=True
                 )
                 c1, c2, c3 = st.columns([1, 2, 1])
                 with c1:
@@ -846,20 +669,16 @@ def render_results_step():
                     st.caption(f"Conf: {row['Best Confidence']:.2f}")
                 with c2:
                     if row['Screenshot'] and os.path.exists(row['Screenshot']):
-                        # Compatibility fix
                         st.image(row['Screenshot'], width=250)
                     else:
                         st.warning("No Image")
                 with c3:
-                    # UPDATED BUTTON LABEL HERE
-                    btn_label = f"▶ Play Video at {row['Start Time']}"
-                    if st.button(btn_label, key=f"play_{i}"):
+                    if st.button(f"▶ Play Video at {row['Start Time']}", key=f"play_{i}"):
                         st.session_state.start_time_player = int(row['Start (sec)'])
                         st.session_state.active_video_for_player = row['Video']
                         st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-    # 2. GRAPH VIEW
     with tab_graph:
         st.markdown("#### Confidence Timeline")
         chart_data = df.copy()
@@ -887,14 +706,12 @@ def render_results_step():
 
         st.altair_chart(c + points, use_container_width=True)
 
-    # 3. RAW DATA VIEW
     with tab_data:
         st.markdown("#### Data Table")
         st.dataframe(df, use_container_width=True)
 
     st.markdown("---")
 
-    # Downloads
     cols = st.columns(3)
     with cols[0]:
         csv = df.to_csv(index=False).encode('utf-8')
@@ -938,12 +755,7 @@ def render_results_step():
 
 
 # ----------------------------
-# 8. Entry Point
+# 6. Entry Point
 # ----------------------------
 inject_pro_ui()
-create_usertable()
-
-if st.session_state.logged_in:
-    main_app()
-else:
-    login_screen()
+main_app()
