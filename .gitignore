@@ -1,0 +1,38 @@
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# ── Virtual environments ─────────────────────────────────
+venv/
+.venv/
+env/
+.env
+
+# ── IDE ──────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+
+# ── AI Model weights (large binaries – download separately) ──
+models_cache/
+models/
+*.zip
+*.onnx
+*.pkl
+*.bin
+
+# ── Sensitive / generated data ───────────────────────────
+data/                  # reference photos & CCTV videos
+outputs/               # detections.csv, screenshot crops, PDFs
+*.npz                  # saved biometric target profiles
+*.db                   # SQLite databases (e.g. users.db)
+
+# ── OS noise ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
