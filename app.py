@@ -843,7 +843,7 @@ def render_sidebar():
 
         if st.session_state.step > 1:
             st.markdown("---")
-            if st.button("🔄 New Case", width="stretch"):
+            if st.button("🔄 New Case", use_container_width=True):
                 # ISSUE 7: best-effort cleanup of this session's temp artifacts
                 cleanup_case_artifacts()
                 for k, v in _DEFAULTS.items():
@@ -892,7 +892,7 @@ def render_target_step():
                         cols[col_idx].image(
                             rgb,
                             caption=fname[:20],
-                            width="stretch"   # FIX #1: non-deprecated param
+                            use_container_width=True   # FIX #1: non-deprecated param
                         )
                 except Exception as e:
                     cols[col_idx].warning(f"Preview error: {e}")
@@ -903,7 +903,7 @@ def render_target_step():
 
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
-        if st.button("⚙️ Build Reference", width="stretch"):
+        if st.button("⚙️ Build Reference", use_container_width=True):
             if not st.session_state.target_files:
                 st.error("Upload at least one image first.")
             else:
@@ -952,7 +952,7 @@ def render_target_step():
                                    f"Pose: {'✓' if st.session_state.ref_pose is not None else '✗ not found'}")
 
     with col2:
-        if st.button("💾 Save Profile", width="stretch"):
+        if st.button("💾 Save Profile", use_container_width=True):
             if st.session_state.ref_face is None:
                 st.warning("Build the reference first.")
             else:
@@ -982,7 +982,7 @@ def render_target_step():
 
     col_nav_1, col_nav_2 = st.columns([4, 1])
     with col_nav_2:
-        if st.button("Next →", width="stretch"):
+        if st.button("Next →", use_container_width=True):
             if st.session_state.ref_face is None:
                 st.error("Click 'Build Reference' first.")
             elif not st.session_state.consent_ok:
@@ -1010,11 +1010,11 @@ def render_source_step():
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("← Back", width="stretch"):
+        if st.button("← Back", use_container_width=True):
             st.session_state.step = 1
             st.rerun()
     with col2:
-        if st.button("Next →", width="stretch"):
+        if st.button("Next →", use_container_width=True):
             if not uploaded and not st.session_state.video_files:
                 st.error("Upload at least one video.")
             else:
@@ -1078,11 +1078,11 @@ def render_scan_step():
     st.markdown("---")
     col1, col2 = st.columns([1, 3])
     with col1:
-        if st.button("← Back", width="stretch"):
+        if st.button("← Back", use_container_width=True):
             st.session_state.step = 2
             st.rerun()
     with col2:
-        if st.button("🚀 Start Analysis", width="stretch"):
+        if st.button("🚀 Start Analysis", use_container_width=True):
             run_analysis()
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1273,7 +1273,7 @@ def run_analysis():
                         preview_bx.image(
                             rgb,
                             caption=f"Match @ {fmt_time(t_sec)} — Conf: {fused:.2f}",
-                            width="stretch"
+                            use_container_width=True
                         )
                 except Exception:
                     pass
@@ -1349,13 +1349,13 @@ def _render_match_card(row, i):
                 img = cv2.imread(str(shot))
                 rgb = bgr_to_rgb_safe(img)
                 if rgb is not None:
-                    st.image(rgb, width="stretch")
+                    st.image(rgb, use_container_width=True)
             except Exception:
                 st.warning("Preview unavailable")
         else:
             st.info("No screenshot")
     with c3:
-        if st.button("▶ Play", key=f"play_{i}", width="stretch"):
+        if st.button("▶ Play", key=f"play_{i}", use_container_width=True):
             st.session_state.start_time_player = int(row.get('Start (sec)', 0) or 0)
             st.session_state.active_video_for_player = str(row.get('Video', ''))
             st.rerun()
@@ -1416,7 +1416,7 @@ def render_results_step():
                     reel_bytes = f.read()
                 st.download_button("⬇️ Highlight Reel", reel_bytes,
                                    "highlight_reel.mp4", "video/mp4",
-                                   key="reel_tab_dl", width="stretch")
+                                   key="reel_tab_dl", use_container_width=True)
             except Exception:
                 pass
         else:
@@ -1441,7 +1441,7 @@ def render_results_step():
                                     "⬇️ Annotated Video", f.read(),
                                     os.path.basename(str(vpath)), "video/mp4",
                                     key=f"annot_tab_{vname}",
-                                    width="stretch")
+                                    use_container_width=True)
                         except Exception:
                             pass
                     else:
@@ -1494,12 +1494,12 @@ def render_results_step():
         st.altair_chart((area + points).configure_view(
             strokeOpacity=0
         ).configure(background='transparent').interactive(),
-                        width="stretch")
+                        use_container_width=True)
 
     # ---- Raw Data tab ----
     with tab_data:
         st.markdown("#### Raw Data Table")
-        st.dataframe(df, width="stretch")
+        st.dataframe(df, use_container_width=True)
 
     st.markdown("---")
 
@@ -1509,13 +1509,13 @@ def render_results_step():
     with r1:
         csv_bytes = df.to_csv(index=False).encode('utf-8')
         st.download_button("⬇️ CSV Report", csv_bytes, "report.csv", "text/csv",
-                           width="stretch")
+                           use_container_width=True)
     with r2:
         if FPDF_AVAILABLE:
             pdf_bytes = generate_pdf_report(df, st.session_state.case_name)
             if pdf_bytes:
                 st.download_button("⬇️ PDF Report", pdf_bytes, "forensic_report.pdf",
-                                   "application/pdf", width="stretch")
+                                   "application/pdf", use_container_width=True)
             else:
                 st.caption("PDF generation failed.")
         else:
@@ -1526,13 +1526,13 @@ def render_results_step():
     with v1:
         shots = [str(row.get('Screenshot', '')) for _, row in df.iterrows()]
         st.download_button("⬇️ Evidence ZIP", make_zip_of_files(shots),
-                           "evidence.zip", "application/zip", width="stretch")
+                           "evidence.zip", "application/zip", use_container_width=True)
     with v2:
         annot_paths = [p for p in annotated_videos.values() if p and os.path.exists(p)]
         if annot_paths:
             st.download_button("⬇️ Annotated Video ZIP", make_zip_of_files(annot_paths),
                                "annotated_videos.zip", "application/zip",
-                               key="annot_zip_dl", width="stretch")
+                               key="annot_zip_dl", use_container_width=True)
         else:
             st.caption("No annotated videos available.")
     with v3:
@@ -1542,7 +1542,7 @@ def render_results_step():
                     reel_bytes = f.read()
                 st.download_button("⬇️ Highlight Reel", reel_bytes,
                                    "highlight_reel.mp4", "video/mp4",
-                                   key="reel_bottom_dl", width="stretch")
+                                   key="reel_bottom_dl", use_container_width=True)
             except Exception:
                 st.caption("Highlight reel unavailable.")
         else:
