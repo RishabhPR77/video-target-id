@@ -3,6 +3,13 @@ import mediapipe as mp
 
 mp_pose = mp.solutions.pose
 
+# NOTE — This module produces a *single-frame posture snapshot*, not temporal
+# gait analysis.  Two different people standing in a similar pose will yield
+# nearly identical embeddings.  It should therefore be treated as a secondary
+# corroborating signal only, never as a primary identity signal.  The face
+# similarity gate must clear its own threshold before pose is allowed to
+# contribute to the fused score (see constants.FACE_THR).
+
 # Keypoint indices we’ll use (MediaPipe Pose has 33 landmarks)
 # We'll craft a compact pose/gait embedding: angles + limb ratios normalized by torso size.
 _USED = dict(

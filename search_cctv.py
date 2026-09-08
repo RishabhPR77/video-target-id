@@ -1,16 +1,13 @@
-import os, cv2, glob, csv, json, numpy as np
+import os, sys, cv2, glob, csv, json, numpy as np
 from tqdm import tqdm
 from numpy.linalg import norm
 from face_module import init_face_app, get_faces, cosine_sim
 from pose_module import extract_pose_feats_bgr
+from constants import FACE_THR, FUSED_THR, W_FACE, W_POSE, CONSEC, COOLDOWN, AUTH_FLAG, AUTH_TEXT
 
 REF_JSON = "outputs/reference_profile.json"
 OUT_CSV = "outputs/detections.csv"
 
-FACE_THR = 0.42
-FUSED_THR = 0.48
-W_FACE, W_POSE = 0.7, 0.3   # must sum to 1.0
-CONSEC = 3               # require N consecutive frames to mitigate false alarms
 FRAME_STRIDE = 3         # analyze every Nth frame for speed
 
 def load_reference():
@@ -61,7 +58,7 @@ def run_on_video(video_path, app, ref_face, ref_pose, writer):
         else:
             consec = 0
 
-        if hit and consec >= CONSEC and (t_sec - last_hit_ts) > 2.0:
+        if hit and consec >= CONSEC and (t_sec - last_hit_ts) > COOLDOWN:
             # save crop for audit
             crop_path = ""
             if best_face is not None:
@@ -88,7 +85,17 @@ def run_on_video(video_path, app, ref_face, ref_pose, writer):
 
     cap.release()
 
-def main():
+def main(argv=None):
+    sys.argv = argv if argv is not None else sys.argv
+    if AUTH_FLAG not in sys.argv:
+        print(
+            f"[ERROR] Authorisation required before processing personal data.\n"
+            f"        {AUTH_TEXT}\n"
+            f"        Re-run with the {AUTH_FLAG} flag to confirm.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     os.makedirs("outputs", exist_ok=True)
     ref_face, ref_pose = load_reference()
     app = init_face_app()

@@ -96,15 +96,17 @@ Then follow the 4-step wizard in your browser:
 
 #### Build a reference profile from photos/videos
 ```bash
-python build_reference.py
+python build_reference.py --i-am-authorized
 ```
 Reads from `data/reference_photos/` (and optionally `data/reference_videos/`), writes `outputs/reference_profile.json`.
+> The `--i-am-authorized` flag confirms you are authorised to process this data for lawful purposes. The script refuses to run without it.
 
 #### Scan a folder of CCTV videos
 ```bash
-python search_cctv.py
+python search_cctv.py --i-am-authorized
 ```
 Reads from `data/cctv_videos/`, writes `outputs/detections.csv` and face crops to `outputs/crops/`.
+> Same authorisation gate applies — run without the flag and the script exits with an error.
 
 ---
 

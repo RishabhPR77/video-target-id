@@ -15,11 +15,14 @@
 import os
 import io
 import time
+import uuid
 import zipfile
 import tempfile
 import gc
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
+
+from constants import FACE_THR, CONSEC, COOLDOWN
 
 import cv2
 import numpy as np
@@ -464,17 +467,22 @@ _DEFAULTS = {
     'threshold': 0.55,
     'skip_frames': 5,
     'process_width': "Medium (640px)",
-    'face_weight': 0.70,
-    'pose_weight': 0.30,
+    'face_weight': 0.80,
+    'pose_weight': 0.20,
     'consent_ok': False,
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
+# ISSUE 3: unique session ID so evidence directories never collide across users
+if 'session_id' not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+
 if 'screens_dir' not in st.session_state:
     st.session_state.screens_dir = ensure_dir(
-        os.path.join(tempfile.gettempdir(), "target_id_screens"))
+        os.path.join(tempfile.gettempdir(), "target_id_screens",
+                     st.session_state.session_id))
 
 
 # ----------------------------
@@ -517,13 +525,14 @@ def render_sidebar():
             help="Minimum fused score to count as a match"
         )
 
+        # ISSUE 2: cap face_weight min at 0.70 so pose_weight can never exceed 0.30
         st.session_state.face_weight = st.slider(
-            "Face Weight", 0.0, 1.0,
+            "Face Weight", 0.70, 1.0,
             float(st.session_state.face_weight), 0.05,
-            help="Weight given to face similarity vs pose"
+            help="Minimum 0.70 — pose can nudge but never carry a match on its own"
         )
         st.session_state.pose_weight = round(1.0 - st.session_state.face_weight, 2)
-        st.caption(f"Pose Weight: **{st.session_state.pose_weight:.2f}** (auto)")
+        st.caption(f"Pose Weight: **{st.session_state.pose_weight:.2f}** (auto-capped)")
 
         st.markdown("---")
 
@@ -811,6 +820,7 @@ def run_analysis():
         fps          = cap.get(cv2.CAP_PROP_FPS) or 25.0
         frame_i      = 0
         seen_last    = -999.0
+        consec       = 0          # ISSUE 1: consecutive matching-frame counter
 
         while cap.isOpened():
             ok, frame = cap.read()
@@ -848,9 +858,9 @@ def run_analysis():
                 face_score = 0.0
                 best_face  = None
 
-            # Pose scoring
+            # Pose scoring — only meaningful once face clears its own threshold
             pose_score = 0.0
-            if st.session_state.ref_pose is not None:
+            if face_score >= FACE_THR and st.session_state.ref_pose is not None:
                 try:
                     pf = extract_pose_feats_bgr(frame_small)
                     if pf is not None:
@@ -858,18 +868,24 @@ def run_analysis():
                 except Exception:
                     pose_score = 0.0
 
-            # Fusion
+            # Fusion (pose contributes only when face gate is passed)
             fused = (st.session_state.face_weight * face_score +
                      st.session_state.pose_weight * pose_score)
 
             t_sec = frame_i / fps
 
-            if fused >= st.session_state.threshold and (t_sec - seen_last) >= 0.5:
+            # ISSUE 1: hit requires BOTH face_gate AND fused threshold
+            hit = (face_score >= FACE_THR) and (fused >= st.session_state.threshold)
+            if hit:
+                consec += 1
+            else:
+                consec = 0
+
+            if hit and consec >= CONSEC and (t_sec - seen_last) >= COOLDOWN:
                 seen_last = t_sec
 
                 # Draw bounding box on evidence frame
                 evidence = frame_small.copy()
-                # FIX #2: Only draw & call cosine_sim when ref_face is not None
                 if best_face is not None and st.session_state.ref_face is not None:
                     try:
                         x1, y1, x2, y2 = map(int, best_face['bbox'])
@@ -885,10 +901,10 @@ def run_analysis():
                     except Exception:
                         pass
 
-                # Save crop
+                # ISSUE 3: namespace crop filenames with session_id
                 crop_path = ""
                 try:
-                    img_name  = f"match_{v_idx}_{int(t_sec * 100)}.jpg"
+                    img_name  = f"match_{st.session_state.session_id}_{v_idx}_{int(t_sec * 100)}.jpg"
                     crop_path = os.path.join(st.session_state.screens_dir, img_name)
                     cv2.imwrite(crop_path, evidence)
                 except Exception:
@@ -900,7 +916,6 @@ def run_analysis():
                     screenshot_path=crop_path, video_name=video_name
                 ))
 
-                # FIX #3: Safe image preview during scan
                 try:
                     rgb = bgr_to_rgb_safe(evidence)
                     if rgb is not None:

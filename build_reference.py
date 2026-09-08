@@ -1,7 +1,8 @@
-import os, cv2, glob, numpy as np, json
+import os, sys, cv2, glob, numpy as np, json
 from tqdm import tqdm
 from face_module import init_face_app, get_faces, mean_normalize_stack
 from pose_module import extract_pose_feats_bgr
+from constants import AUTH_FLAG, AUTH_TEXT
 
 REF_JSON = "outputs/reference_profile.json"
 
@@ -57,4 +58,12 @@ def build_reference(reference_photos_dir, reference_videos_dir=None):
     print(f"[OK] Saved reference profile → {REF_JSON}")
 
 if __name__ == "__main__":
+    if AUTH_FLAG not in sys.argv:
+        print(
+            f"[ERROR] Authorisation required before building a biometric reference.\n"
+            f"        {AUTH_TEXT}\n"
+            f"        Re-run with the {AUTH_FLAG} flag to confirm.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     build_reference("data/reference_photos", "data/reference_videos")
