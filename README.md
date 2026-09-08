@@ -33,7 +33,6 @@ video-target-id/
 ├── build_reference.py      # CLI — build a reference profile from photos/videos
 ├── search_cctv.py          # CLI — batch-scan a folder of CCTV videos
 ├── requirements.txt        # Pinned Python dependencies
-├── packages.txt            # System packages for the dev container (libgl1, libglib2.0)
 ├── .devcontainer/          # GitHub Codespaces / VS Code Remote dev container
 │   └── devcontainer.json
 ├── .gitignore
@@ -74,7 +73,7 @@ These are removed by “🔄 New Case” / “🔄 Start New Analysis” (best-e
 
 - **Python 3.10–3.11** (dev container uses 3.11)
 - **ffmpeg** on `PATH` (optional — the app falls back to the `imageio-ffmpeg` bundled binary; without either, it skips the H.264 upgrade and keeps mp4v files)
-- Linux/headless systems also need system libs `libgl1` and `libglib2.0-0t64` (see `packages.txt`)
+- Uses `opencv-python-headless` (no `libgl1` required for deployment)
 
 ### 1. Clone
 
