@@ -11,3 +11,4 @@ scikit-learn
 tqdm
 Pillow
 fpdf2
+imageio-ffmpeg

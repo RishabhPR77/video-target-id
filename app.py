@@ -17,6 +17,8 @@ import io
 import time
 import uuid
 import shutil
+import subprocess
+import functools
 import zipfile
 import tempfile
 import gc
@@ -356,6 +358,67 @@ def confidence_badge(conf: float):
     return "error", "Low"
 
 
+@functools.lru_cache(maxsize=1)
+def _find_ffmpeg() -> Optional[str]:
+    """Locate an ffmpeg binary for best-effort H.264 transcoding (Issue 16).
+
+    Prefers a system ffmpeg on PATH, then falls back to imageio-ffmpeg's
+    bundled binary. Returns None if neither exists — the annotated pipeline
+    still works, it just skips the codec upgrade for browser previews.
+    """
+    try:
+        exe = shutil.which("ffmpeg")
+        if exe:
+            return exe
+    except Exception:
+        pass
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.isfile(exe):
+            return exe
+    except Exception:
+        pass
+    return None
+
+
+def _transcode_h264(src_path: str, dst_path: str, ffmpeg_bin: str, timeout: int = 600) -> bool:
+    """Best-effort mp4v → H.264 transcode for browser compatibility."""
+    try:
+        proc = subprocess.run(
+            [ffmpeg_bin, "-y", "-i", src_path,
+             "-c:v", "libx264", "-pix_fmt", "yuv420p",
+             "-movflags", "+faststart", dst_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        return (proc.returncode == 0 and os.path.exists(dst_path)
+                and os.path.getsize(dst_path) > 1024)
+    except Exception:
+        return False
+
+
+def _maybe_transcode(src_path: str, ffmpeg_bin) -> Optional[str]:
+    """Transcode src to a sibling *_h264.mp4 if possible; always return a path.
+
+    Best-effort: on any failure or when ffmpeg is unavailable, the original
+    mp4v file is kept so the pipeline never breaks over this improvement.
+    """
+    if not ffmpeg_bin or not src_path or not os.path.exists(src_path):
+        return src_path
+    dst_path = os.path.splitext(src_path)[0] + "_h264.mp4"
+    if _transcode_h264(src_path, dst_path, ffmpeg_bin):
+        try:
+            os.remove(src_path)
+        except Exception:
+            pass
+        return dst_path
+    try:
+        if os.path.exists(dst_path):
+            os.remove(dst_path)
+    except Exception:
+        pass
+    return src_path
+
+
 def _write_reel_divider(writer, width, height, fps, video_name, src_start_sec):
     """Write ~1 s of dark labelled frames before a reel clip."""
     try:
@@ -368,17 +431,95 @@ def _write_reel_divider(writer, width, height, fps, video_name, src_start_sec):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (148, 163, 184), 1)
         n = max(1, int(round(fps)))
         for _ in range(n):
+            # ISSUE 17: defensive size guard — divider canvas must match writer
+            if frame.shape[1] != width or frame.shape[0] != height:
+                frame = cv2.resize(frame, (width, height))
             writer.write(frame)
     except Exception:
         pass
 
 
-def build_highlight_reel():
-    """Write highlight_reel.mp4 from per-source annotated clips.
+def _write_reel_clip_fallback(cap, start_f, end_f, width, height, writer):
+    """Last-resort sequential copy for a reel clip. Never raises.
 
-    Annotated videos only contain 1-in-stride processed frames, so every
-    annotated second covers ``stride`` source seconds.  Clip windows are
-    therefore computed as ``source_time / stride`` in annotated time.
+    Used when the retiming path hits an unexpected error so a single odd clip
+    can never abort highlight-reel generation.
+    """
+    try:
+        start_f = max(0, int(start_f))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
+        for _ in range(max(0, int(end_f) - start_f + 1)):
+            ok, frm = cap.read()
+            if not ok or frm is None:
+                break
+            if frm.shape[1] != width or frm.shape[0] != height:
+                frm = cv2.resize(frm, (width, height))
+            writer.write(frm)
+    except Exception:
+        pass
+
+
+def _write_reel_clip(cap, start_f, end_f, clip_fps, out_fps, width, height, writer):
+    """Write clip frames [start_f..end_f] into the reel at reel timing (Issue 18).
+
+    When the source clip's native frame rate differs from the reel's by more
+    than 0.5 fps, the clip is retimed by nearest-source-frame sampling: each
+    output frame picks the source frame closest to its virtual playback
+    timestamp (src = start_f + round(out_i * clip_fps / out_fps)), using only
+    forward reads so decoding stays sequential. Clips at effectively the same
+    fps are copied 1:1. Any edge case / error falls back to a plain sequential
+    copy — highlight-reel generation must never break over a single clip.
+    """
+    start_f  = max(0, int(start_f))
+    end_f    = max(start_f, int(end_f))
+    clip_fps = float(clip_fps)
+    out_fps  = float(out_fps)
+
+    try:
+        if clip_fps <= 0 or abs(clip_fps - out_fps) <= 0.5:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
+            for _ in range(end_f - start_f + 1):
+                ok, frm = cap.read()
+                if not ok or frm is None:
+                    break
+                if frm.shape[1] != width or frm.shape[0] != height:
+                    frm = cv2.resize(frm, (width, height))
+                writer.write(frm)
+            return
+
+        n_out    = max(1, int(round((end_f - start_f + 1) * out_fps / clip_fps)))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
+        cur      = start_f - 1   # index of the frame held in last_frm
+        last_frm = None
+        for out_i in range(n_out):
+            target = start_f + min(
+                end_f - start_f,
+                int(round(out_i * clip_fps / out_fps)))
+            while cur < target:
+                ok, frm = cap.read()
+                if not ok or frm is None:
+                    last_frm = None
+                    break
+                last_frm = frm
+                cur += 1
+            if last_frm is None or cur != target:
+                break
+            frm = last_frm
+            if frm.shape[1] != width or frm.shape[0] != height:
+                frm = cv2.resize(frm, (width, height))
+            writer.write(frm)
+    except Exception:
+        _write_reel_clip_fallback(cap, start_f, end_f, width, height, writer)
+
+
+def build_highlight_reel():
+    """Concatenate per-source annotated clips into a highlight reel.
+
+    Annotated videos are now written at real source time (Issue 15), so clip
+    windows map 1:1 onto the source timeline. Source clips that don't match the
+    reel canvas resolution are resized rather than silently dropped (Issue 17),
+    and clips running at a different native frame rate are retimed to the reel's
+    fps so every clip plays at the same real-time speed (Issue 18).
     """
     try:
         annotated_videos = st.session_state.get("annotated_videos", {}) or {}
@@ -387,7 +528,7 @@ def build_highlight_reel():
             st.session_state.highlight_reel_path = ""
             return
 
-        stride = max(1, int(st.session_state.get("skip_frames", 0)) + 1)
+        ffmpeg_bin = _find_ffmpeg()  # ISSUE 16: optional H.264 upgrade
         first_path = next(iter(annotated_videos.values()))
         probe = cv2.VideoCapture(str(first_path))
         if not probe.isOpened():
@@ -398,7 +539,7 @@ def build_highlight_reel():
         fps    = probe.get(cv2.CAP_PROP_FPS) or 25.0
         probe.release()
 
-        pad = 2.0  # annotated-time seconds of context around each clip
+        pad = 2.0  # source-time seconds of context around each clip
         ordered = df.copy().sort_values(["Start (sec)", "Video"])
         clips: list = []
         for _, row in ordered.iterrows():
@@ -407,8 +548,8 @@ def build_highlight_reel():
                 continue
             src_start = float(row.get("Start (sec)", 0) or 0)
             src_dur   = float(row.get("Duration (sec)", 2.0) or 2.0)
-            clips.append((str(path), src_start / stride, src_dur / stride,
-                          str(row.get("Video", "")), src_start))
+            clips.append((str(path), src_start, src_dur,
+                          str(row.get("Video", ""))))
 
         if not clips:
             st.session_state.highlight_reel_path = ""
@@ -421,29 +562,31 @@ def build_highlight_reel():
             st.session_state.highlight_reel_path = ""
             return
 
-        for path, annot_start, annot_dur, vname, src_start in clips:
+        for path, src_start, src_dur, vname in clips:
             _write_reel_divider(writer, width, height, fps, vname, src_start)
             cap = cv2.VideoCapture(path)
             if not cap.isOpened():
                 continue
+            # ISSUE 18: read the clip's OWN frame rate — sources with a truly
+            # different native fps must be retimed or they'd play back at the
+            # wrong speed against the reel's timeline
+            clip_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            if clip_fps <= 0:
+                clip_fps = fps
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            start_f = max(0, int((annot_start - pad) * fps))
-            end_f   = min(total - 1, int((annot_start + annot_dur + pad) * fps))
+            start_f = max(0, int((src_start - pad) * clip_fps))
+            end_f   = min(total - 1, int((src_start + src_dur + pad) * clip_fps))
             if end_f <= start_f:
                 end_f = min(total - 1, start_f + 1)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
-            cur = start_f
-            while cur <= end_f:
-                ok, frm = cap.read()
-                if not ok:
-                    break
-                writer.write(frm)
-                cur += 1
-            cap.release()
+            try:
+                _write_reel_clip(cap, start_f, end_f, clip_fps, fps,
+                                 width, height, writer)
+            finally:
+                cap.release()
 
         writer.release()
         if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:
-            st.session_state.highlight_reel_path = out_path
+            st.session_state.highlight_reel_path = _maybe_transcode(out_path, ffmpeg_bin)
         else:
             st.session_state.highlight_reel_path = ""
     except Exception:
@@ -965,10 +1108,11 @@ def run_analysis():
 
     all_events: List[MatchEvent] = []
     annotated_videos: Dict[str, str] = {}
-    stride = max(1, int(st.session_state.get('skip_frames', 0)) + 1)
     annot_dir = ensure_dir(os.path.join(st.session_state.screens_dir, "annotated"))
-    # ISSUE 13: how long (in *annotated* time) the tracking box keeps drawing
-    # after the detector last saw the face — avoids flicker between hits
+    # ISSUE 16: one optional H.264 transcode step for browser-friendly previews
+    ffmpeg_bin = _find_ffmpeg()
+    # how long (in source-time seconds) the tracking box keeps drawing after the
+    # detector last saw the face — avoids flicker between hits
     hold_sec = 1.0
 
     target_width = 320
@@ -993,12 +1137,13 @@ def run_analysis():
         seen_last    = -999.0
         consec       = 0          # ISSUE 1: consecutive matching-frame counter
 
-        # ISSUE 13: per-source annotated output — lazy writer (needs frame_small dims)
+        # ISSUE 13/15: per-source annotated output — lazy writer (needs
+        # frame_small dims); every source frame is written at real fps
         writer       = None
         annot_path   = ""
         annot_failed = False
         last_bbox    = None
-        last_annot_ts = -999.0
+        last_seen_ts = -999.0
         last_fused   = 0.0
 
         while cap.isOpened():
@@ -1006,25 +1151,22 @@ def run_analysis():
             if not ok:
                 break
 
-            # Skip frames
-            if st.session_state.skip_frames > 0 and (frame_i % (st.session_state.skip_frames + 1) != 0):
-                frame_i += 1
-                continue
-
             if frame is None or frame.size == 0:
                 frame_i += 1
                 continue
 
             h, w = frame.shape[:2]
 
-            # Smart resize
+            # Smart resize — applied to EVERY frame since it feeds the writer
             if w > target_width:
                 scale       = target_width / float(w)
                 frame_small = cv2.resize(frame, (target_width, int(h * scale)))
             else:
                 frame_small = frame.copy()
 
-            # ISSUE 13: create annotated writer on the first processed frame
+            t_sec = frame_i / fps
+
+            # ISSUE 13/15: create annotated writer on the first frame
             if writer is None and not annot_failed:
                 try:
                     annot_path = os.path.join(
@@ -1039,6 +1181,26 @@ def run_analysis():
                 except Exception:
                     writer = None
                     annot_failed = True
+
+            # ISSUE 15: write EVERY source frame at real fps so playback speed
+            # is correct; the tracking box persists within the hold window
+            if writer is not None:
+                try:
+                    annot_frame = frame_small.copy()
+                    if last_bbox is not None and (t_sec - last_seen_ts) <= hold_sec:
+                        draw_match_annotation(annot_frame, last_bbox, last_fused)
+                    writer.write(annot_frame)
+                    del annot_frame
+                except Exception:
+                    pass
+
+            # ISSUE 15: frame skipping now gates DETECTION only — the video is
+            # already written above, so the scan stays fast while the file is
+            # smooth and real-time (same detection cadence as before)
+            if st.session_state.skip_frames > 0 and (frame_i % (st.session_state.skip_frames + 1) != 0):
+                frame_i += 1
+                del frame, frame_small
+                continue
 
             # Face scoring
             face_score = 0.0
@@ -1067,14 +1229,12 @@ def run_analysis():
             fused = (st.session_state.face_weight * face_score +
                      st.session_state.pose_weight * pose_score)
 
-            t_sec = frame_i / fps
-
             # ISSUE 13: track the latest face passing the face gate so the box
-            # can persist between hits (annotated time runs stride× faster)
+            # can persist between hits (real source time now)
             if (best_face is not None and face_score >= FACE_THR
                     and st.session_state.ref_face is not None):
                 last_bbox     = tuple(best_face['bbox'])
-                last_annot_ts = t_sec / stride
+                last_seen_ts  = t_sec
                 last_fused    = fused
 
             # ISSUE 1: hit requires BOTH face_gate AND fused threshold
@@ -1083,18 +1243,6 @@ def run_analysis():
                 consec += 1
             else:
                 consec = 0
-
-            # ISSUE 13: write every processed frame; tracking box drawn within
-            # the hold window to avoid flicker between consecutive hits
-            if writer is not None:
-                try:
-                    annot_frame = frame_small.copy()
-                    if last_bbox is not None and (t_sec / stride - last_annot_ts) <= hold_sec:
-                        draw_match_annotation(annot_frame, last_bbox, last_fused)
-                    writer.write(annot_frame)
-                    del annot_frame
-                except Exception:
-                    pass
 
             if hit and consec >= CONSEC and (t_sec - seen_last) >= COOLDOWN:
                 seen_last = t_sec
@@ -1148,10 +1296,11 @@ def run_analysis():
         cap.release()
         gc.collect()
 
-        # ISSUE 13: keep the annotated clip only if it is a real file
+        # ISSUE 13: keep the annotated clip only if it is a real file;
+        # ISSUE 16: upgrade mp4v → H.264 for browser previews when possible
         if (annot_path and os.path.exists(annot_path)
                 and os.path.getsize(annot_path) > 1024):
-            annotated_videos[video_name] = annot_path
+            annotated_videos[video_name] = _maybe_transcode(annot_path, ffmpeg_bin)
 
     prog_bar.progress(1.0)
     time.sleep(0.3)
@@ -1260,6 +1409,8 @@ def render_results_step():
                 st.video(reel_path)
             except Exception:
                 st.warning("Preview unavailable (browser may not support the video codec).")
+            st.caption("If the preview doesn't play, use the download button — "
+                       "the file is valid; some browsers don't support this codec.")
             try:
                 with open(reel_path, 'rb') as f:
                     reel_bytes = f.read()
@@ -1282,6 +1433,8 @@ def render_results_step():
                             st.video(str(vpath))
                         except Exception:
                             st.warning("Preview unavailable for this annotated video.")
+                        st.caption("If the preview doesn't play, use the download button — "
+                                   "the file is valid; some browsers don't support this codec.")
                         try:
                             with open(str(vpath), 'rb') as f:
                                 st.download_button(
@@ -1397,8 +1550,8 @@ def render_results_step():
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Video Player — prefers annotated clip; start_time_player stores source
-    # seconds, which is mapped through the stride when playing annotated output
+    # Video Player — prefers annotated clip; annotated time == source time now,
+    # so the seek position needs no stride mapping (Issue 15)
     if st.session_state.start_time_player > 0:
         st.markdown('<div class="glass">', unsafe_allow_html=True)
         active_name = st.session_state.active_video_for_player
@@ -1411,9 +1564,7 @@ def render_results_step():
         seek_sec = st.session_state.start_time_player
         annotated_path = annotated_videos.get(active_name, "")
         if annotated_path and os.path.exists(annotated_path):
-            stride = max(1, int(st.session_state.get('skip_frames', 0)) + 1)
             vid_path = annotated_path
-            seek_sec = int(st.session_state.start_time_player / stride)
         elif active_name in st.session_state.video_names:
             idx = st.session_state.video_names.index(active_name)
             vid_path = st.session_state.video_files[idx]
@@ -1425,6 +1576,8 @@ def render_results_step():
                 st.video(vid_path, start_time=seek_sec)
             except Exception:
                 st.warning("Playback unavailable (codec not supported by browser).")
+            st.caption("If the preview doesn't play, use the download button — "
+                       "the file is valid; some browsers don't support this codec.")
         else:
             st.error("Video file not found in session — it may have been cleaned up.")
 
