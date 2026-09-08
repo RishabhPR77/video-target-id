@@ -16,6 +16,7 @@ import os
 import io
 import time
 import uuid
+import shutil
 import zipfile
 import tempfile
 import gc
@@ -438,6 +439,29 @@ def make_zip_of_screenshots(paths: List[str]) -> bytes:
     return buf.getvalue()
 
 
+def cleanup_case_artifacts():
+    """Best-effort filesystem cleanup before starting a new case.
+
+    Removes only the *current* session's temp videos and evidence screenshots.
+    Never touches other sessions' directories (they live under their own
+    session_id). Keeps session_id intact; a fresh screens_dir is re-created by
+    the caller/session-init afterwards. Failures are swallowed on purpose —
+    a locked/missing file must not crash the reset button.
+    """
+    for p in st.session_state.get('video_files', []):
+        try:
+            if p and os.path.isfile(p):
+                os.remove(p)
+        except Exception:
+            pass
+    screens_dir = st.session_state.get('screens_dir', '')
+    if screens_dir:
+        try:
+            shutil.rmtree(screens_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
 @st.cache_resource(show_spinner=False)
 def load_face_engine():
     """Load InsightFace engine, cached across reruns. Returns (engine, error_msg)."""
@@ -552,8 +576,14 @@ def render_sidebar():
         if st.session_state.step > 1:
             st.markdown("---")
             if st.button("🔄 New Case", use_container_width=True):
+                # ISSUE 7: best-effort cleanup of this session's temp artifacts
+                cleanup_case_artifacts()
                 for k, v in _DEFAULTS.items():
                     st.session_state[k] = v
+                # keep session_id; recreate a fresh evidence dir for the next case
+                st.session_state.screens_dir = ensure_dir(
+                    os.path.join(tempfile.gettempdir(), "target_id_screens",
+                                 st.session_state.session_id))
                 st.rerun()
 
 
@@ -719,7 +749,11 @@ def render_source_step():
                     paths, names = [], []
                     for up in uploaded:
                         try:
-                            tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+                            # ISSUE 6: keep the real container extension — an
+                            # .avi/.mov/.mkv forced into a .mp4 name can make
+                            # OpenCV's backend fail or misread the file
+                            suffix = os.path.splitext(up.name)[1] or '.mp4'
+                            tfile = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
                             tfile.write(up.getvalue())
                             tfile.close()
                             paths.append(tfile.name)
@@ -1112,8 +1146,14 @@ def render_results_step():
         st.markdown('</div>', unsafe_allow_html=True)
 
     if st.button("🔄 Start New Analysis", use_container_width=False):
+        # ISSUE 7: best-effort cleanup of this session's temp artifacts (same
+        # treatment as the sidebar "New Case" button)
+        cleanup_case_artifacts()
         for k, v in _DEFAULTS.items():
             st.session_state[k] = v
+        st.session_state.screens_dir = ensure_dir(
+            os.path.join(tempfile.gettempdir(), "target_id_screens",
+                         st.session_state.session_id))
         st.rerun()
 
 
