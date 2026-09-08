@@ -25,7 +25,7 @@ import gc
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
-from constants import FACE_THR, CONSEC, COOLDOWN
+from backend.constants import FACE_THR, CONSEC, COOLDOWN
 
 import cv2
 import numpy as np
@@ -39,8 +39,8 @@ try:
 except ImportError:
     FPDF_AVAILABLE = False
 
-from face_module import init_face_app, get_faces, mean_normalize_stack, cosine_sim
-from pose_module import extract_pose_feats_bgr
+from backend.face_module import init_face_app, get_faces, mean_normalize_stack, cosine_sim
+from backend.pose_module import extract_pose_feats_bgr
 
 # ----------------------------
 # 1. Page Configuration

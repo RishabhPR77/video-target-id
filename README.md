@@ -1,6 +1,6 @@
 # 🎯 Video Target Identification System
 
-An AI-powered forensic video analysis tool that searches CCTV/surveillance footage for a specific person using **face recognition** (InsightFace) corroborated by a **body-pose snapshot** (MediaPipe) — all wrapped in a Streamlit web app plus two headless CLI scripts.
+An AI-powered forensic video analysis tool that searches CCTV/surveillance footage for a specific person using **face recognition** (InsightFace) corroborated by a **body-pose snapshot** (MediaPipe) and an **upper-body clothing descriptor** — served by a FastAPI backend with a React (TanStack) frontend, plus a legacy Streamlit web app and two headless CLI scripts.
 
 > **Purpose:** given 1–5 reference photos of a target person, scan one or more CCTV clips and report every sighting — timestamped, scored, screenshot-evidenced, and exported as CSV / PDF / ZIP / annotated videos / a highlight reel.
 
@@ -8,44 +8,57 @@ An AI-powered forensic video analysis tool that searches CCTV/surveillance foota
 
 ## ✨ Features
 
-- **Face recognition** — InsightFace `buffalo_s` model produces L2-normalized 512-dimensional embeddings from reference photos and from every scanned frame.
+- **Face recognition** — InsightFace `buffalo_l` model pack (SCRFD `det_10g` detector + ResNet50 `w600k_r50` recogniser) produces L2-normalized 512-dimensional embeddings from reference photos and from every scanned frame — with an auto-fallback to `buffalo_s` if the big pack isn't installed.
 - **Pose corroboration** — MediaPipe extracts 33 body landmarks → a compact 12-dimensional posture descriptor (joint angles + limb ratios + torso-normalized offsets). This is a **single-frame posture snapshot, not gait/temporal analysis** — it is a secondary signal that can nudge a match but can never carry one.
-- **Fused confidence score** — `fused = W_FACE · face_score + W_POSE · pose_score`, adjustable live in the sidebar (face weight clamped to a 0.70–1.0 range so pose never dominates).
+- **Clothing corroboration** — an HSV histogram over the upper-body region below the face (8×8×8 bins, L2-normalized) compares the target's attire against each frame. Same clothing supports a face match; a different outfit drags the fused score down. Capped at 0.10 weight — clothing **cannot** identify someone on its own.
+- **Continuous target tracking** — once the target clears the gate, the tracking box is locked onto them and **kept on the screen** across every annotated frame (velocity-extrapolated through brief flickers/occlusions) rather than appearing only at hit moments. When they leave frame for a few seconds, the sighting is closed; when they reappear, they're matched again against the live-refined identity.
+- **Live profile learning** — while the target is visible, their clearest face embeddings, actual posture, and **observed upper-body clothing** continuously refine the in-memory reference (`REFINE_MEM_POOL` recent views). Re-acquisition and later videos in the batch therefore match against *who he actually is in this footage*, not just the initial photos. On completion a refined `.npz` profile can be downloaded so a future scan starts smarter, and the report lists the observed clothing colours.
+- **Capped evidence** — instead of a screenshot per hit, only the `MAX_EVIDENCE_SHOTS` (=5) strongest sightings keep an evidence frame (the rest are deleted).
+- **Fused confidence score** — `fused = face_weight · face_score + pose_weight · pose_score + cloth_weight · cloth_score` (weights sum to 1, clothing capped at 0.10). Face weight is clamped to 0.70–1.0 so pose/clothing can only nudge.
 - **Match gating** — a frame only counts after it clears a **face gate**, produces a fused score above the threshold, fires for **N consecutive frames**, and is outside the per-event **cooldown window**.
 - **Multi-video batch scanning** — upload multiple MP4 / AVI / MOV / MKV files (or scan a folder headlessly via CLI).
 - **Annotated preview videos** — every source is re-encoded with live tracking boxes; upgraded to browser-friendly H.264 via a bundled ffmpeg (`imageio-ffmpeg`), best-effort.
 - **Highlight reel** — auto-concatenates each sighting (with context padding) into a single clip, normalizing resolution **and frame rate** so sources with different fps still play at the correct speed.
 - **Evidence export** — PDF report, CSV log, evidence ZIP, annotated-video ZIP, per-match high-confidence screenshots.
-- **Privacy-first by design** — consent checkbox before analysis, per-session temporary directories (`session_id`-namespaced), best-effort cleanup on “New Case”.
+- **Privacy-first by design** — consent checkbox before analysis, per-scan temporary directories, best-effort cleanup.
 
 ---
 
 ## 🗂️ Repository Layout
 
-`data/`, `models_cache/` and `outputs/` are **not committed** — they are created at runtime (see table below).
+Runtime data (`backend/data/`, `models_cache/`, `outputs/`) is **not committed** — it is created at runtime (see table below). `frontend/node_modules` and build output are gitignored too.
 
 ```
 video-target-id/
-├── app.py                  # Streamlit app — the 4-step wizard + analysis engine
-├── face_module.py          # InsightFace wrapper (buffalo_s, 512-d embeddings, cosine sim)
-├── pose_module.py          # MediaPipe pose embedder (12-d posture descriptor)
-├── constants.py            # Shared thresholds, fusion weights, CLI auth flag
-├── build_reference.py      # CLI — build a reference profile from photos/videos
-├── search_cctv.py          # CLI — batch-scan a folder of CCTV videos
-├── requirements.txt        # Pinned Python dependencies
-├── .devcontainer/          # GitHub Codespaces / VS Code Remote dev container
+├── backend/                 # FastAPI service + ML pipeline (primary)
+│   ├── main.py              # REST API: reference · uploads · scans · exports
+│   ├── engine.py            # analysis engine (framework-free, background threads)
+│   ├── face_module.py       # InsightFace wrapper (buffalo_l, 512-d embeddings, cosine sim)
+│   ├── pose_module.py       # MediaPipe pose embedder (12-d posture descriptor)
+│   ├── constants.py         # Shared thresholds, fusion weights, CLI auth flag
+│   ├── build_reference.py   # CLI — build a reference profile from photos/videos
+│   ├── search_cctv.py       # CLI — batch-scan a folder of CCTV videos
+│   └── data/                # runtime uploads/scans/reference (gitignored)
+├── frontend/                # React (TanStack Start) UI — talks to backend/ via REST
+│   ├── src/lib/api.ts       # API layer (only file that touches fetch())
+│   ├── src/lib/types.ts     # Wire contract shared with the backend
+│   ├── src/routes/          # 4-step wizard: /, /source, /scan, /results
+│   └── package.json
+├── app.py                   # LEGACY Streamlit app (same pipeline, older UI)
+├── requirements.txt         # Pinned Python dependencies (backend + legacy)
+├── .devcontainer/           # GitHub Codespaces / VS Code Remote dev container
 │   └── devcontainer.json
 ├── .gitignore
-├── .gitattributes          # Git LFS wiring for model weights (*.onnx)
+├── .gitattributes           # Git LFS wiring for model weights (*.onnx)
 └── README.md
 ```
 
 | Path | Git | When it appears | What it holds |
 |------|-----|-----------------|---------------|
-| `models_cache/models/buffalo_s/` | ignored | first run (auto-download) | InsightFace model weights |
-| `data/reference_photos/` | ignored | you create it | CLI reference photos |
-| `data/reference_videos/` | ignored | optional | CLI reference walking clips |
-| `data/cctv_videos/` | ignored | you create it | CLI scan input |
+| `models_cache/models/buffalo_{l,s}/` | ignored | first run (auto-download) | InsightFace model weights |
+| `backend/data/uploads/` | ignored | video upload via API | uploaded source footage |
+| `backend/data/scans/<scan_id>/` | ignored | a scan starts | annotated videos, screenshots, highlight reel |
+| `backend/data/reference/` | ignored | reference build | transient reference photo cache |
 | `outputs/reference_profile.json` | ignored | `build_reference.py` runs | CLI reference profile (raw biometrics — handle with care) |
 | `outputs/detections.csv` | ignored | `search_cctv.py` runs | CLI scan results |
 | `outputs/crops/` | ignored | `search_cctv.py` runs | CLI evidence crops |
@@ -103,7 +116,13 @@ pip install -r requirements.txt
 
 ### 4. Models (automatic)
 
-InsightFace downloads the `buffalo_s` weights into `models_cache/` on first run — no manual step.
+InsightFace downloads the `buffalo_l` weights into `models_cache/` on first run (~270 MB total) — no manual step. If the download fails or a stricter model is wanted, override via environment variables at launch:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `FACE_MODEL` | `buffalo_l` | InsightFace pack; falls back to `buffalo_s` if unavailable |
+| `FACE_DET_SIZE` | `896,896` | Detector inference size — larger finds smaller faces (slower) |
+| `FACE_DET_THRESH` | `0.4` | Detector confidence floor — lower recovers blurry/occluded faces |
 
 ### Optional: GitHub Codespaces / dev container
 
@@ -115,32 +134,58 @@ The repo ships a `.devcontainer/` — open it in Codespaces or VS Code Remote to
 
 ## 🚀 Usage
 
-### Option A — Streamlit web app (recommended)
+### Option A — React frontend + FastAPI backend (recommended)
+
+Start the backend (from the repo root):
+
+```bash
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+Install and start the frontend (Node 20+ / npm):
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open the Vite dev URL (default `http://localhost:5173`). The frontend calls the backend at `http://localhost:8000` by default; override with `VITE_API_BASE` (e.g. `.env.local` with `VITE_API_BASE=https://api.example.com`) if they're not co-hosted.
+
+```mermaid
+flowchart LR
+    F[React frontend :5173] <-->|REST / polling| B[FastAPI backend :8000]
+    B --> E[engine.py<br/>face + pose + clothing]
+```
+
+| Step | What you do |
+|------|-------------|
+| **1 – Target Setup** | Drop 1–5 front-facing reference photos → **Build Reference**. Optional **Save Profile** downloads the embeddings as `.npz`. Tick the authorisation checkbox, then **Next**. |
+| **2 – Video Source** | Drop one or more CCTV files (MP4 / AVI / MOV / MKV) → **Next**. |
+| **3 – AI Scan** | Watch live progress; matched frames stream in as they're found → **View Results** |
+| **4 – Results** | Inspect the highlight reel + per-source annotated videos, match timeline, confidence graph, screenshots; download CSV / PDF / evidence / highlighted ZIPs. Play a sighting to seek straight to it in the annotated clip. |
+
+```mermaid
+flowchart TB
+    S1[1 · Target Setup<br/>photos → Build Reference] --> S2[2 · Video Source<br/>upload CCTV files]
+    S2 --> S3[3 · AI Scan<br/>live progress]
+    S3 --> S4[4 · Results<br/>reel · timeline · graph · exports]
+    S4 -->|Start New Analysis| S1
+```
+
+### Option B — Streamlit web app (legacy)
+
+The original single-file UI still runs the same pipeline:
 
 ```bash
 streamlit run app.py
 ```
 
-Then follow the 4-step wizard in your browser (`localhost:8501`):
+Follow the 4-step wizard in your browser (`localhost:8501`).
 
-| Step | What you do |
-|------|-------------|
-| **1 – Target Setup** | Upload 1–5 front-facing reference photos → **⚙️ Build Reference**. Optional **💾 Save Profile** downloads the embeddings as `.npz`. Tick the authorisation checkbox, then **Next**. |
-| **2 – Video Source** | Upload one or more CCTV files (MP4 / AVI / MOV / MKV) → **Next**. |
-| **3 – AI Scan** | Set frame skipping & scan resolution, then **🚀 Start Analysis**. |
-| **4 – Results** | Inspect the highlight reel + per-source annotated videos, match timeline, confidence graph, screenshots; download CSV / PDF / evidence ZIPs. |
+### Option C — CLI scripts (headless)
 
-```mermaid
-flowchart TB
-    S1[1 · Target Setup<br/>photos → Build Reference] --> S2[2 · Video Source<br/>upload CCTV files]
-    S2 --> S3[3 · AI Scan<br/>Start Analysis]
-    S3 --> S4[4 · Results<br/>reel · timeline · graph · exports]
-    S4 -->|New Case / Start New Analysis| S1
-```
-
-### Option B — CLI scripts (headless)
-
-The CLI scripts are independent of the web app — they read from `data/` and write to `outputs/`. Both require the **authorisation flag** and refuse to run without it.
+The CLI scripts are independent of the web app — they read `data/` and `outputs/` in the repo root (run them **from the repo root**) and write to `outputs/`. Both require the **authorisation flag** and refuse to run without it.
 
 ```bash
 # 1) prepare your input folders
@@ -148,16 +193,16 @@ mkdir -p data/reference_photos data/cctv_videos
 #    (drop reference pictures / CCTV videos into them)
 
 # 2) build the reference profile
-python build_reference.py --i-am-authorized
+python backend/build_reference.py --i-am-authorized
 
 # 3) scan a folder of CCTV videos
-python search_cctv.py --i-am-authorized
+python backend/search_cctv.py --i-am-authorized
 ```
 
 | Script | Reads | Writes |
 |--------|-------|--------|
-| `build_reference.py` | `data/reference_photos/` (any image) + optional `data/reference_videos/` (stride 5) | `outputs/reference_profile.json` |
-| `search_cctv.py` | `outputs/reference_profile.json` + `data/cctv_videos/*.*` (stride 3) | `outputs/detections.csv`, `outputs/crops/*.jpg` |
+| `backend/build_reference.py` | `data/reference_photos/` (any image) + optional `data/reference_videos/` (stride 5) | `outputs/reference_profile.json` |
+| `backend/search_cctv.py` | `outputs/reference_profile.json` + `data/cctv_videos/*.*` (stride 3) | `outputs/detections.csv`, `outputs/crops/*.jpg` |
 
 ---
 
@@ -177,30 +222,34 @@ flowchart LR
     subgraph SCAN["Scan per frame (Step 3)"]
         F[CCTV frame] --> G[face_score = cosine_sim]
         F --> H[pose_score = cosine_sim]
+        F --> I[cloth_score = cosine_sim<br/>HSV upper-body histogram]
     end
 
-    G --> I{Face gate<br/>face_score ≥ FACE_THR?}
-    I -- no --> Z[pose may NOT contribute<br/>fused = 0]
-    I -- yes --> J[fused = face_weight·face<br/>+ pose_weight·pose]
+    G --> J{Face gate<br/>face_score ≥ FACE_THR?}
+    J -- no --> Z[pose/clothing may NOT contribute<br/>fused = 0]
+    J -- yes --> K[fused = face_weight·face<br/>+ pose_weight·pose<br/>+ cloth_weight·cloth]
 
-    J --> K{Fused ≥ threshold?}
-    K -- no --> Z2[no hit]
-    K -- yes --> L[consec += 1]
-    L --> M{consec ≥ CONSEC<br/>and <br/>t − last_hit ≥ COOLDOWN?}
-    M -- no --> Z3[keep scanning]
-    M -- yes --> N[Log match · save screenshot]
+    K --> L{Fused ≥ threshold?}
+    L -- no --> Z2[no hit]
+    L -- yes --> M[consec += 1]
+    M --> N{consec ≥ CONSEC<br/>and <br/>t − last_hit ≥ COOLDOWN?}
+    N -- no --> Z3[keep scanning]
+    N -- yes --> O[Log match · save screenshot]
 ```
 
 ### Score math
 
 ```
-face_score = cosine_sim(face_embedding_512d, reference_face_embedding)
-pose_score = cosine_sim(pose_descriptor_12d, reference_pose_descriptor)
+face_score  = cosine_sim(face_embedding_512d, reference_face_embedding)
+pose_score  = cosine_sim(pose_descriptor_12d, reference_pose_descriptor)
+cloth_score = cosine_sim(HSV_histogram_512d, reference_clothing_histogram)
 
-fused = face_weight · face_score + pose_weight · pose_score      # weights sum to 1
+fused = face_weight · face_score                                # weights sum to 1
+      + pose_weight  · pose_score   (pose_weight = 1 − face − cloth, ≥ 0)
+      + cloth_weight · cloth_score  (cloth_weight = min(0.10, 1 − face))
 
-hit  = (face_score ≥ FACE_THR) AND (fused ≥ threshold)          # pose only helps
-                                                                 # after the face gate
+hit  = (face_score ≥ FACE_THR) AND (fused ≥ threshold)          # pose/clothing only
+                                                                 # help after the face gate
 ```
 
 ### Match decision
@@ -217,9 +266,10 @@ flowchart TD
     L --> M[Save screenshot · last_logged = t]
 ```
 
-### Pose caveat (important)
+### Pose & clothing caveats (important)
 
-`pose_module.py` produces a **single-frame posture snapshot**, not temporal gait analysis — two people standing in a similar posture produce nearly identical descriptors. Pose is therefore only a corroborating signal and is gated by `FACE_THR`; the face embedding remains the identity anchor.
+- `pose_module.py` produces a **single-frame posture snapshot**, not temporal gait analysis — two people standing in a similar posture produce nearly identical descriptors. Pose is therefore only a corroborating signal and is gated by `FACE_THR`; the face embedding remains the identity anchor.
+- The **clothing descriptor** (HSV histogram of the upper-body region below the face) works the same way: it supports a face match when the outfit matches and drags the score down when it doesn't, but **identical clothing alone cannot identify anyone** — the face gate must clear first, and clothing weight is capped at 0.10.
 
 ---
 
@@ -231,9 +281,13 @@ flowchart TD
 |----------|---------|-------------|
 | `FACE_THR` | `0.42` | Minimum face cosine-similarity for a frame to count toward a hit |
 | `FUSED_THR` | `0.45` | Minimum fused score in the CLI scanner (`search_cctv.py`) |
-| `CONSEC` | `3` | Consecutive qualifying frames required before logging |
+| `CONSEC` | `3` | Consecutive qualifying frames required before logging / (re)acquisition |
 | `COOLDOWN` | `2.0 s` | Minimum gap in seconds between logged hits |
-| `W_FACE` / `W_POSE` | `0.80` / `0.20` | Fusion weights used by the CLI scanner |
+| `REACQUIRE_GAP` | `4.0 s` | Target unseen this long → close the sighting; they're searched for again |
+| `MIN_SIGHTING_SECS` | `0.4 s` | Shorter tracks (flicker) are discarded |
+| `MAX_EVIDENCE_SHOTS` | `5` | Keep only the N strongest evidence screenshots per scan |
+| `W_FACE` / `W_POSE` | `0.80` / `0.20` | CLI scanner fusion weights |
+| `W_CLOTH` / `CLOTH_WEIGHT_CAP` | `0.10` | Clothing corroboration weight; when a scan uses a custom face weight, cloth is capped at `min(0.10, 1 − face)` and pose gets the remainder |
 | `AUTH_FLAG` | `--i-am-authorized` | Gate required by both CLI scripts |
 
 ### Streamlit UI — sidebar controls
@@ -252,14 +306,17 @@ flowchart TD
 
 | Package | Purpose |
 |---------|---------|
-| `streamlit` | Web UI |
-| `insightface` | Face detection & `buffalo_s` recognition (512-d embeddings) |
+| `fastapi` | REST API for the React frontend |
+| `uvicorn[standard]` | ASGI server for `backend/main.py` |
+| `python-multipart` | Multipart uploads (reference photos, video files) |
+| `streamlit` | Legacy web UI (`app.py`) |
+| `insightface` | Face detection & `buffalo_l` recognition (512-d embeddings) |
 | `onnxruntime` | InsightFace inference backend |
 | `mediapipe` | Pose landmark extraction → 12-d posture descriptor |
 | `opencv-python-headless` | Video I/O and image processing |
 | `numpy` | Array math (pinned `<2` for insightface/mediapipe compatibility) |
-| `pandas` | Match timeline & results tables |
-| `altair` | Confidence-over-time chart |
+| `pandas` | Match timeline & results tables (legacy UI + CLI) |
+| `altair` | Confidence-over-time chart (legacy UI) |
 | `fpdf2` | PDF report generation |
 | `imageio-ffmpeg` | Bundled ffmpeg binary for mp4v → H.264 transcoding |
 | `tqdm` | CLI progress bars |
@@ -280,16 +337,18 @@ This tool is intended for **authorized forensic and security use only**. Process
 
 The biometrics this tool produces are **raw, unencrypted embeddings of identifiable persons**:
 
-- `outputs/reference_profile.json` — written by the CLI `build_reference.py` (JSON arrays of `{"face": […], "pose": […]}`).
-- `.npz` profiles — downloaded via the app's **💾 Save Profile** button.
-- `outputs/crops/*.jpg` and match screenshots — raw face images, also unencrypted.
+- `backend/data/scans/<scan_id>/` — match screenshots (raw face crops) + annotated videos, created per scan via the API.
+- `backend/data/uploads/` — uploaded source footage, kept until the process exits.
+- `outputs/reference_profile.json` — written by the CLI `backend/build_reference.py` (JSON arrays of `{"face": […], "pose": […]}`).
+- `.npz` profiles — downloaded via the app's **Save Profile** button.
+- `outputs/crops/*.jpg` — CLI evidence crops, also unencrypted.
 
 Operators must:
 - **Store and access-control these files as sensitive biometric data** under their own jurisdiction's legal obligations.
-- **Delete them when no longer needed** (see `outputs/` and the `<temp>/target_id_screens/<session_id>/` folder).
+- **Delete them when no longer needed** (see `backend/data/`, `outputs/`, and the `<temp>/target_id_screens/<session_id>/` legacy folder).
 - **Never commit them to version control, email them, or place them on unprotected storage.**
 
-This tool provides **no encryption-at-rest**. `data/`, `outputs/`, `models_cache/` and `*.npz` are gitignored, but protecting them is your responsibility (encrypted volumes, OS-level encryption, etc.).
+This tool provides **no encryption-at-rest**. `backend/data/`, `outputs/`, `models_cache/` and `*.npz` are gitignored, but protecting them is your responsibility (encrypted volumes, OS-level encryption, etc.).
 
 ---
 

@@ -1,3 +1,5 @@
+import threading
+
 import numpy as np
 import mediapipe as mp
 
@@ -67,10 +69,30 @@ def pose_embedding(landmarks32):
     n = np.linalg.norm(feat) + 1e-9
     return feat / n
 
+_pose_lock = threading.Lock()
+_pose_instance = None
+
+
+def _get_pose():
+    """Return a shared MediaPipe Pose graph.
+
+    Constructing a Pose graph is expensive (hundreds of ms to seconds), so it
+    is created once and reused.  MediaPipe processes one image at a time, so
+    concurrent callers are serialised through a lock.
+    """
+    global _pose_instance
+    if _pose_instance is None:
+        with _pose_lock:
+            if _pose_instance is None:
+                _pose_instance = mp_pose.Pose(static_image_mode=True, model_complexity=1)
+    return _pose_instance
+
+
 def extract_pose_feats_bgr(img_bgr):
-    with mp_pose.Pose(static_image_mode=True) as pose:
+    pose = _get_pose()
+    with _pose_lock:
         res = pose.process(img_bgr[:, :, ::-1])  # BGR->RGB
-        if not res.pose_landmarks:
-            return None
-        lm = np.array([[l.x, l.y, l.z] for l in res.pose_landmarks.landmark], dtype=np.float32)
-        return pose_embedding(lm)
+    if not res.pose_landmarks:
+        return None
+    lm = np.array([[l.x, l.y, l.z] for l in res.pose_landmarks.landmark], dtype=np.float32)
+    return pose_embedding(lm)

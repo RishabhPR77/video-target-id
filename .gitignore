@@ -21,6 +21,13 @@ ENV/
 
 .devcontainer/
 
+node_modules/
+.vinxi/
+.output/
+.tanstack/
+.nitro/
+.wrangler/
+
 models/
 models_cache/
 *.onnx
@@ -34,6 +41,8 @@ outputs/
 outputs/crops/
 outputs/reference_profile.json
 outputs/detections.csv
+
+backend/data/
 
 data/
 *.npz

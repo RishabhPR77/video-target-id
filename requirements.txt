@@ -12,3 +12,8 @@ tqdm
 Pillow
 fpdf2
 imageio-ffmpeg
+
+# backend API
+fastapi
+uvicorn[standard]
+python-multipart
