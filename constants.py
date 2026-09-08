@@ -6,7 +6,7 @@ ensure consistent behaviour across interfaces.
 
 # ── Match thresholds ──────────────────────────────────────────────
 FACE_THR  = 0.42   # minimum face-similarity before a frame can count as a hit
-FUSED_THR = 0.48   # minimum fused (face+pose) score
+FUSED_THR = 0.45   # minimum fused (face+pose) score
 CONSEC    = 3      # consecutive matching frames required before logging
 COOLDOWN  = 2.0    # minimum seconds between logged hits
 

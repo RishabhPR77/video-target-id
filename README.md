@@ -230,7 +230,7 @@ flowchart TD
 | Constant | Default | Description |
 |----------|---------|-------------|
 | `FACE_THR` | `0.42` | Minimum face cosine-similarity for a frame to count toward a hit |
-| `FUSED_THR` | `0.48` | Minimum fused score in the CLI scanner (`search_cctv.py`) |
+| `FUSED_THR` | `0.45` | Minimum fused score in the CLI scanner (`search_cctv.py`) |
 | `CONSEC` | `3` | Consecutive qualifying frames required before logging |
 | `COOLDOWN` | `2.0 s` | Minimum gap in seconds between logged hits |
 | `W_FACE` / `W_POSE` | `0.80` / `0.20` | Fusion weights used by the CLI scanner |
@@ -240,9 +240,9 @@ flowchart TD
 
 | Control | Default | Notes |
 |---------|---------|-------|
-| Detection Threshold | `0.55` | Slider 0.30–0.95; the app's fused-score cut-off (mirrors `FUSED_THR` for CLI) |
+| Detection Threshold | `0.45` | Slider 0.30–0.95; the app's fused-score cut-off (mirrors `FUSED_THR` for CLI) |
 | Face Weight | `0.80` | Slider 0.70–1.0 (pose = `1 − face`), so pose can only ever nudge |
-| Frame Skipping | `5` | Slider 0–60; skips **detection only** — annotated videos are always written at full frame rate |
+| Frame Skipping | `2` | Slider 0–60; skips **detection only** — annotated videos are always written at full frame rate |
 | Scan Resolution | `Medium (640px)` | `Low (320px)` / `Medium (640px)` / `High (1280px, capped)` |
 | Frame Skip (CLI only) | `3` | `FRAME_STRIDE` in `search_cctv.py` |
 

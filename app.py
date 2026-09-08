@@ -210,9 +210,17 @@ def inject_pro_ui():
         [data-testid="stMetricValue"] { color: #38bdf8 !important; font-weight: 700; }
 
         /* ---- PROGRESS BAR ---- */
+        .stProgress [data-testid="stProgressBar"] {
+            background: rgba(255, 255, 255, 0.08) !important;
+            border: 1px solid rgba(56, 189, 248, 0.35) !important;
+            border-radius: 8px !important;
+            overflow: hidden;
+            box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6);
+        }
         .stProgress > div > div > div {
-            background: linear-gradient(90deg, #0ea5e9, #8b5cf6) !important;
-            border-radius: 4px;
+            background: linear-gradient(90deg, #22d3ee 0%, #0ea5e9 50%, #8b5cf6 100%) !important;
+            border-radius: 8px !important;
+            box-shadow: 0 0 12px rgba(34, 211, 238, 0.55) !important;
         }
 
         /* ---- SLIDERS ---- */
@@ -756,8 +764,8 @@ _DEFAULTS = {
     'highlight_reel_path': "",
     'start_time_player': 0,
     'active_video_for_player': "",
-    'threshold': 0.55,
-    'skip_frames': 5,
+    'threshold': 0.45,
+    'skip_frames': 2,
     'process_width': "Medium (640px)",
     'face_weight': 0.80,
     'pose_weight': 0.20,
