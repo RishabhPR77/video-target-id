@@ -19,6 +19,12 @@
   },
   "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
   "postAttachCommand": {
+    // ⚠️ LOCAL CODESPACE CONVENIENCE ONLY — do NOT copy these flags into a real
+    // deployment launch command.  --server.enableCORS false and
+    // --server.enableXsrfProtection false disable browser security protections
+    // and are acceptable only for ephemeral local/dev iteration.  For production,
+    // omit them (use Streamlit's secure defaults) or configure CORS/XSRF properly
+    // for your real domain.
     "server": "streamlit run app.py --server.enableCORS false --server.enableXsrfProtection false"
   },
   "portsAttributes": {

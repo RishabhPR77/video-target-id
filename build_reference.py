@@ -53,9 +53,15 @@ def build_reference(reference_photos_dir, reference_videos_dir=None):
     ref = {"face": ref_face.tolist() if ref_face is not None else None,
            "pose": ref_pose.tolist() if ref_pose is not None else None}
 
+    # WARNING — reference_profile.json contains raw, UNENCRYPTED biometric
+    # embeddings of identifiable persons. Handle, access-control, and delete
+    # per your own legal obligations (see README → "Data Handling").
     with open(REF_JSON, "w") as f:
         json.dump(ref, f)
     print(f"[OK] Saved reference profile → {REF_JSON}")
+    print("[NOTICE] This file contains UNENCRYPTED biometric embeddings — "
+          "store it securely and delete when no longer needed. "
+          "See the README 'Data Handling' section.")
 
 if __name__ == "__main__":
     if AUTH_FLAG not in sys.argv:

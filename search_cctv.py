@@ -1,6 +1,5 @@
 import os, sys, cv2, glob, csv, json, numpy as np
 from tqdm import tqdm
-from numpy.linalg import norm
 from face_module import init_face_app, get_faces, cosine_sim
 from pose_module import extract_pose_feats_bgr
 from constants import FACE_THR, FUSED_THR, W_FACE, W_POSE, CONSEC, COOLDOWN, AUTH_FLAG, AUTH_TEXT
@@ -16,10 +15,6 @@ def load_reference():
     ref_face = np.array(ref["face"], dtype=np.float32) if ref["face"] is not None else None
     ref_pose = np.array(ref["pose"], dtype=np.float32) if ref["pose"] is not None else None
     return ref_face, ref_pose
-
-def sim_pose(p, q):
-    if p is None or q is None: return 0.0
-    return float(np.dot(p, q) / (norm(p)*norm(q) + 1e-9))
 
 def run_on_video(video_path, app, ref_face, ref_pose, writer):
     cap = cv2.VideoCapture(video_path)
@@ -48,7 +43,7 @@ def run_on_video(video_path, app, ref_face, ref_pose, writer):
 
         # POSE (posture/gait proxy)
         pose = extract_pose_feats_bgr(frame)
-        pose_score = sim_pose(pose, ref_pose) if (pose is not None and ref_pose is not None) else 0.0
+        pose_score = cosine_sim(pose, ref_pose) if (pose is not None and ref_pose is not None) else 0.0
 
         fused = W_FACE*face_score + W_POSE*pose_score
         hit = (face_score >= FACE_THR) and (fused >= FUSED_THR)

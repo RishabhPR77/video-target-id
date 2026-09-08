@@ -313,22 +313,141 @@ def bgr_to_rgb_safe(img: np.ndarray) -> Optional[np.ndarray]:
         return None
 
 
-def cosine_sim_np(a: np.ndarray, b: np.ndarray) -> float:
-    if a is None or b is None:
-        return 0.0
-    try:
-        a = a.flatten().astype(np.float32)
-        b = b.flatten().astype(np.float32)
-        denom = (np.linalg.norm(a) * np.linalg.norm(b)) + 1e-9
-        return float(np.dot(a, b) / denom)
-    except Exception:
-        return 0.0
-
-
 def pick_best_face(faces: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not faces:
         return None
     return max(faces, key=lambda f: (f['bbox'][2] - f['bbox'][0]) * (f['bbox'][3] - f['bbox'][1]))
+
+
+def sanitize_filename(name: str) -> str:
+    """Keep only filesystem-safe characters for generated filenames."""
+    safe = ''.join(c if (c.isalnum() or c in ' ._-') else '_' for c in name)
+    return safe.strip() or "video"
+
+
+def draw_match_annotation(frame: np.ndarray, bbox, fused_score: float):
+    """In-place green tracking box + confidence label.
+
+    Shared by evidence crops and the annotated video output so the two stay
+    visually identical.
+    """
+    try:
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = map(int, bbox)
+        x1 = max(0, x1); y1 = max(0, y1)
+        x2 = min(w - 1, x2); y2 = min(h - 1, y2)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 80), 2)
+        label = f"Conf: {fused_score:.2f}"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        ty = max(0, y1 - 22)
+        cv2.rectangle(frame, (x1, ty), (min(w - 1, x1 + tw + 4), y1), (0, 220, 80), -1)
+        cv2.putText(frame, label, (x1 + 2, y1 - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    except Exception:
+        pass
+
+
+def confidence_badge(conf: float):
+    """Map a confidence score to (pill_css_class, human_label)."""
+    if conf >= 0.75:
+        return "ok", "High"
+    if conf >= 0.55:
+        return "warn", "Medium"
+    return "error", "Low"
+
+
+def _write_reel_divider(writer, width, height, fps, video_name, src_start_sec):
+    """Write ~1 s of dark labelled frames before a reel clip."""
+    try:
+        frame = np.zeros((height, width, 3), dtype=np.uint8)
+        cv2.putText(frame, "HIGHLIGHT REEL", (24, 42),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (56, 189, 248), 2)
+        cv2.putText(frame, str(video_name)[:40], (24, 76),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (226, 232, 240), 1)
+        cv2.putText(frame, f"Match @ {fmt_time(src_start_sec)}", (24, 106),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (148, 163, 184), 1)
+        n = max(1, int(round(fps)))
+        for _ in range(n):
+            writer.write(frame)
+    except Exception:
+        pass
+
+
+def build_highlight_reel():
+    """Write highlight_reel.mp4 from per-source annotated clips.
+
+    Annotated videos only contain 1-in-stride processed frames, so every
+    annotated second covers ``stride`` source seconds.  Clip windows are
+    therefore computed as ``source_time / stride`` in annotated time.
+    """
+    try:
+        annotated_videos = st.session_state.get("annotated_videos", {}) or {}
+        df = st.session_state.get("timeline_df", pd.DataFrame())
+        if not annotated_videos or df is None or len(df) == 0:
+            st.session_state.highlight_reel_path = ""
+            return
+
+        stride = max(1, int(st.session_state.get("skip_frames", 0)) + 1)
+        first_path = next(iter(annotated_videos.values()))
+        probe = cv2.VideoCapture(str(first_path))
+        if not probe.isOpened():
+            st.session_state.highlight_reel_path = ""
+            return
+        width  = int(probe.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps    = probe.get(cv2.CAP_PROP_FPS) or 25.0
+        probe.release()
+
+        pad = 2.0  # annotated-time seconds of context around each clip
+        ordered = df.copy().sort_values(["Start (sec)", "Video"])
+        clips: list = []
+        for _, row in ordered.iterrows():
+            path = annotated_videos.get(str(row.get("Video", "")))
+            if not path or not os.path.exists(str(path)):
+                continue
+            src_start = float(row.get("Start (sec)", 0) or 0)
+            src_dur   = float(row.get("Duration (sec)", 2.0) or 2.0)
+            clips.append((str(path), src_start / stride, src_dur / stride,
+                          str(row.get("Video", "")), src_start))
+
+        if not clips:
+            st.session_state.highlight_reel_path = ""
+            return
+
+        out_path = os.path.join(st.session_state.screens_dir, "highlight_reel.mp4")
+        writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"),
+                                 fps, (width, height))
+        if not writer.isOpened():
+            st.session_state.highlight_reel_path = ""
+            return
+
+        for path, annot_start, annot_dur, vname, src_start in clips:
+            _write_reel_divider(writer, width, height, fps, vname, src_start)
+            cap = cv2.VideoCapture(path)
+            if not cap.isOpened():
+                continue
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            start_f = max(0, int((annot_start - pad) * fps))
+            end_f   = min(total - 1, int((annot_start + annot_dur + pad) * fps))
+            if end_f <= start_f:
+                end_f = min(total - 1, start_f + 1)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
+            cur = start_f
+            while cur <= end_f:
+                ok, frm = cap.read()
+                if not ok:
+                    break
+                writer.write(frm)
+                cur += 1
+            cap.release()
+
+        writer.release()
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:
+            st.session_state.highlight_reel_path = out_path
+        else:
+            st.session_state.highlight_reel_path = ""
+    except Exception:
+        st.session_state.highlight_reel_path = ""
 
 
 def generate_pdf_report(df: pd.DataFrame, case_name: str) -> bytes:
@@ -398,8 +517,8 @@ class MatchEvent:
 def group_events(events: List[MatchEvent], merge_gap_sec: float = 2.0) -> pd.DataFrame:
     if not events:
         return pd.DataFrame(columns=["Video", "Start Time", "End Time", "Duration",
-                                     "Best Confidence", "Best Face", "Best Pose",
-                                     "Start (sec)", "Screenshot"])
+                                     "Duration (sec)", "Best Confidence", "Best Face",
+                                     "Best Pose", "Start (sec)", "Screenshot"])
 
     events = sorted(events, key=lambda e: (e.video_name, e.t_sec))
     rows = []
@@ -422,6 +541,7 @@ def group_events(events: List[MatchEvent], merge_gap_sec: float = 2.0) -> pd.Dat
             "Start Time":       fmt_time(start),
             "End Time":         fmt_time(end),
             "Duration":         f"{end - start:.1f}s",
+            "Duration (sec)":   round(float(end - start), 2),
             "Best Confidence":  float(best.fused_score),
             "Best Face":        float(best.face_score),
             "Best Pose":        float(best.pose_score),
@@ -430,7 +550,8 @@ def group_events(events: List[MatchEvent], merge_gap_sec: float = 2.0) -> pd.Dat
     return pd.DataFrame(rows)
 
 
-def make_zip_of_screenshots(paths: List[str]) -> bytes:
+def make_zip_of_files(paths: List[str]) -> bytes:
+    """Zip existing file paths into an in-memory archive (by basename)."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for p in paths:
@@ -443,10 +564,12 @@ def cleanup_case_artifacts():
     """Best-effort filesystem cleanup before starting a new case.
 
     Removes only the *current* session's temp videos and evidence screenshots.
-    Never touches other sessions' directories (they live under their own
-    session_id). Keeps session_id intact; a fresh screens_dir is re-created by
-    the caller/session-init afterwards. Failures are swallowed on purpose —
-    a locked/missing file must not crash the reset button.
+    The rmtree on screens_dir also clears the annotated/ subfolder and the
+    highlight reel, which live inside it. Never touches other sessions'
+    directories (they live under their own session_id). Keeps session_id intact;
+    a fresh screens_dir is re-created by the caller/session-init afterwards.
+    Failures are swallowed on purpose — a locked/missing file must not crash
+    the reset button.
     """
     for p in st.session_state.get('video_files', []):
         try:
@@ -486,6 +609,8 @@ _DEFAULTS = {
     'single_video_path': None,
     'raw_events': [],
     'timeline_df': pd.DataFrame(),
+    'annotated_videos': {},
+    'highlight_reel_path': "",
     'start_time_player': 0,
     'active_video_for_player': "",
     'threshold': 0.55,
@@ -624,7 +749,7 @@ def render_target_step():
                         cols[col_idx].image(
                             rgb,
                             caption=fname[:20],
-                            use_column_width=True   # FIX #1: use_column_width for max compatibility
+                            use_container_width=True   # FIX #1: non-deprecated param
                         )
                 except Exception as e:
                     cols[col_idx].warning(f"Preview error: {e}")
@@ -689,6 +814,9 @@ def render_target_step():
                 st.warning("Build the reference first.")
             else:
                 tmp = io.BytesIO()
+                # WARNING — exported .npz contains raw, UNENCRYPTED biometric
+                # embeddings. See README → "Data Handling" for storage and
+                # deletion obligations.
                 np.savez(
                     tmp,
                     ref_face=st.session_state.ref_face,
@@ -702,6 +830,8 @@ def render_target_step():
                     file_name="target_profile.npz",
                     mime="application/octet-stream"
                 )
+                st.caption("⚠️ Exported file is **unencrypted biometric data** — "
+                           "store securely and delete when no longer needed.")
 
     st.markdown("---")
     st.session_state.consent_ok = st.checkbox(
@@ -834,6 +964,12 @@ def run_analysis():
     preview_bx = st.empty()
 
     all_events: List[MatchEvent] = []
+    annotated_videos: Dict[str, str] = {}
+    stride = max(1, int(st.session_state.get('skip_frames', 0)) + 1)
+    annot_dir = ensure_dir(os.path.join(st.session_state.screens_dir, "annotated"))
+    # ISSUE 13: how long (in *annotated* time) the tracking box keeps drawing
+    # after the detector last saw the face — avoids flicker between hits
+    hold_sec = 1.0
 
     target_width = 320
     if "640" in st.session_state.process_width:
@@ -844,6 +980,7 @@ def run_analysis():
     for v_idx, video_path in enumerate(st.session_state.video_files):
         video_name = st.session_state.video_names[v_idx]
         status_txt.markdown(f"**Scanning:** `{video_name}` ({v_idx + 1}/{len(st.session_state.video_files)})")
+        prog_bar.progress(0.0)
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -855,6 +992,14 @@ def run_analysis():
         frame_i      = 0
         seen_last    = -999.0
         consec       = 0          # ISSUE 1: consecutive matching-frame counter
+
+        # ISSUE 13: per-source annotated output — lazy writer (needs frame_small dims)
+        writer       = None
+        annot_path   = ""
+        annot_failed = False
+        last_bbox    = None
+        last_annot_ts = -999.0
+        last_fused   = 0.0
 
         while cap.isOpened():
             ok, frame = cap.read()
@@ -879,6 +1024,22 @@ def run_analysis():
             else:
                 frame_small = frame.copy()
 
+            # ISSUE 13: create annotated writer on the first processed frame
+            if writer is None and not annot_failed:
+                try:
+                    annot_path = os.path.join(
+                        annot_dir,
+                        f"{sanitize_filename(os.path.splitext(video_name)[0])}_annotated.mp4")
+                    writer = cv2.VideoWriter(
+                        annot_path, cv2.VideoWriter_fourcc(*'mp4v'),
+                        fps, (frame_small.shape[1], frame_small.shape[0]))
+                    if not writer.isOpened():
+                        writer = None
+                        annot_failed = True
+                except Exception:
+                    writer = None
+                    annot_failed = True
+
             # Face scoring
             face_score = 0.0
             best_face  = None
@@ -898,7 +1059,7 @@ def run_analysis():
                 try:
                     pf = extract_pose_feats_bgr(frame_small)
                     if pf is not None:
-                        pose_score = cosine_sim_np(pf, st.session_state.ref_pose)
+                        pose_score = cosine_sim(pf, st.session_state.ref_pose)
                 except Exception:
                     pose_score = 0.0
 
@@ -908,6 +1069,14 @@ def run_analysis():
 
             t_sec = frame_i / fps
 
+            # ISSUE 13: track the latest face passing the face gate so the box
+            # can persist between hits (annotated time runs stride× faster)
+            if (best_face is not None and face_score >= FACE_THR
+                    and st.session_state.ref_face is not None):
+                last_bbox     = tuple(best_face['bbox'])
+                last_annot_ts = t_sec / stride
+                last_fused    = fused
+
             # ISSUE 1: hit requires BOTH face_gate AND fused threshold
             hit = (face_score >= FACE_THR) and (fused >= st.session_state.threshold)
             if hit:
@@ -915,25 +1084,25 @@ def run_analysis():
             else:
                 consec = 0
 
+            # ISSUE 13: write every processed frame; tracking box drawn within
+            # the hold window to avoid flicker between consecutive hits
+            if writer is not None:
+                try:
+                    annot_frame = frame_small.copy()
+                    if last_bbox is not None and (t_sec / stride - last_annot_ts) <= hold_sec:
+                        draw_match_annotation(annot_frame, last_bbox, last_fused)
+                    writer.write(annot_frame)
+                    del annot_frame
+                except Exception:
+                    pass
+
             if hit and consec >= CONSEC and (t_sec - seen_last) >= COOLDOWN:
                 seen_last = t_sec
 
-                # Draw bounding box on evidence frame
+                # Draw bounding box on evidence frame (shared helper)
                 evidence = frame_small.copy()
                 if best_face is not None and st.session_state.ref_face is not None:
-                    try:
-                        x1, y1, x2, y2 = map(int, best_face['bbox'])
-                        x1 = max(0, x1); y1 = max(0, y1)
-                        x2 = min(evidence.shape[1] - 1, x2)
-                        y2 = min(evidence.shape[0] - 1, y2)
-                        cv2.rectangle(evidence, (x1, y1), (x2, y2), (0, 220, 80), 2)
-                        label = f"Conf: {fused:.2f}"
-                        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-                        cv2.rectangle(evidence, (x1, y1 - 22), (x1 + tw + 4, y1), (0, 220, 80), -1)
-                        cv2.putText(evidence, label, (x1 + 2, y1 - 6),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-                    except Exception:
-                        pass
+                    draw_match_annotation(evidence, best_face['bbox'], fused)
 
                 # ISSUE 3: namespace crop filenames with session_id
                 crop_path = ""
@@ -956,7 +1125,7 @@ def run_analysis():
                         preview_bx.image(
                             rgb,
                             caption=f"Match @ {fmt_time(t_sec)} — Conf: {fused:.2f}",
-                            use_column_width=True
+                            use_container_width=True
                         )
                 except Exception:
                     pass
@@ -971,8 +1140,18 @@ def run_analysis():
             if frame_i % 50 == 0:
                 gc.collect()
 
+        if writer is not None:
+            try:
+                writer.release()
+            except Exception:
+                writer = None
         cap.release()
         gc.collect()
+
+        # ISSUE 13: keep the annotated clip only if it is a real file
+        if (annot_path and os.path.exists(annot_path)
+                and os.path.getsize(annot_path) > 1024):
+            annotated_videos[video_name] = annot_path
 
     prog_bar.progress(1.0)
     time.sleep(0.3)
@@ -983,15 +1162,57 @@ def run_analysis():
     status_txt.empty()
     st.markdown('</div>', unsafe_allow_html=True)
 
-    st.session_state.raw_events   = all_events
-    st.session_state.timeline_df  = group_events(all_events)
-    st.session_state.step         = 4
+    st.session_state.raw_events       = all_events
+    st.session_state.annotated_videos = annotated_videos
+    st.session_state.timeline_df      = group_events(all_events)
+    build_highlight_reel()
+    st.session_state.step             = 4
     st.rerun()
 
 
 # ----------------------------
 # 8. Results Step
 # ----------------------------
+def _render_match_card(row, i):
+    """Render a single match card into the current Streamlit container."""
+    conf = float(row.get('Best Confidence', 0) or 0)
+    cls, label = confidence_badge(conf)
+    st.markdown('<div class="match-card">', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([2, 2, 1])
+    with c1:
+        st.markdown(
+            f"**Match #{i}** &nbsp; "
+            f'<span class="pill info">{str(row.get("Video", "") or "")[:20]}</span> '
+            f'<span class="pill {cls}">{label}</span>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"⏱ **{row.get('Start Time', '')}** → {row.get('End Time', '')}  |  "
+            f"{row.get('Duration', '')}")
+        st.caption(
+            f"Face: {float(row.get('Best Face', 0) or 0):.3f}  |  "
+            f"Pose: {float(row.get('Best Pose', 0) or 0):.3f}"
+        )
+    with c2:
+        shot = row.get('Screenshot', '')
+        if shot and os.path.exists(str(shot)):
+            try:
+                img = cv2.imread(str(shot))
+                rgb = bgr_to_rgb_safe(img)
+                if rgb is not None:
+                    st.image(rgb, use_container_width=True)
+            except Exception:
+                st.warning("Preview unavailable")
+        else:
+            st.info("No screenshot")
+    with c3:
+        if st.button("▶ Play", key=f"play_{i}", use_container_width=True):
+            st.session_state.start_time_player = int(row.get('Start (sec)', 0) or 0)
+            st.session_state.active_video_for_player = str(row.get('Video', ''))
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def render_results_step():
     st.markdown('<div class="glass">', unsafe_allow_html=True)
     st.markdown("### 📊 Step 4 — Evidence Report")
@@ -1006,60 +1227,90 @@ def render_results_step():
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
-    # Metrics row
-    m1, m2, m3 = st.columns(3)
+    # ISSUE 14: richer summary metrics
+    total_dur = 0.0
+    if 'Duration (sec)' in df.columns:
+        try:
+            total_dur = float(df['Duration (sec)'].sum())
+        except Exception:
+            total_dur = 0.0
+    best_conf = float(df['Best Confidence'].max())
+    avg_conf  = float(df['Best Confidence'].mean())
+
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total Matches", len(df))
-    best_conf = df['Best Confidence'].max()
-    m2.metric("Highest Confidence", f"{best_conf:.1%}")
+    m2.metric("Total Sighting Duration", f"{total_dur:.1f}s")
     m3.metric("Videos Scanned", df['Video'].nunique())
+    m4.metric("Highest Confidence", f"{best_conf:.1%}")
+    m5.metric("Average Confidence", f"{avg_conf:.1%}")
 
     st.markdown("---")
 
-    tab_list, tab_graph, tab_data = st.tabs(
-        ["🖼️  Match Details", "📈  Confidence Graph", "📋  Raw Data"])
+    tab_video, tab_list, tab_graph, tab_data = st.tabs(
+        ["🎬 Tracked Video", "🖼️  Match Details", "📈  Confidence Graph", "📋  Raw Data"])
 
+    annotated_videos = st.session_state.get('annotated_videos', {}) or {}
+    reel_path        = st.session_state.get('highlight_reel_path', '')
+
+    # ---- Tracked Video tab ----
+    with tab_video:
+        st.markdown("#### ▶️ Highlight Reel")
+        if reel_path and os.path.exists(reel_path):
+            try:
+                st.video(reel_path)
+            except Exception:
+                st.warning("Preview unavailable (browser may not support the video codec).")
+            try:
+                with open(reel_path, 'rb') as f:
+                    reel_bytes = f.read()
+                st.download_button("⬇️ Highlight Reel", reel_bytes,
+                                   "highlight_reel.mp4", "video/mp4",
+                                   key="reel_tab_dl", use_container_width=True)
+            except Exception:
+                pass
+        else:
+            st.info("Highlight reel unavailable for this run.")
+        st.markdown("---")
+        st.markdown("#### 📼 Tracked Videos (per source)")
+        if annotated_videos:
+            vcols = st.columns(2)
+            for vi, (vname, vpath) in enumerate(annotated_videos.items()):
+                with vcols[vi % 2]:
+                    st.markdown(f"**{vname}**")
+                    if os.path.exists(str(vpath)):
+                        try:
+                            st.video(str(vpath))
+                        except Exception:
+                            st.warning("Preview unavailable for this annotated video.")
+                        try:
+                            with open(str(vpath), 'rb') as f:
+                                st.download_button(
+                                    "⬇️ Annotated Video", f.read(),
+                                    os.path.basename(str(vpath)), "video/mp4",
+                                    key=f"annot_tab_{vname}",
+                                    use_container_width=True)
+                        except Exception:
+                            pass
+                    else:
+                        st.info("Annotated video missing.")
+        else:
+            st.info("Annotated videos were not produced for this run.")
+
+    # ---- Match Details tab ----
     with tab_list:
         st.markdown("#### Match Timeline")
-        for i, row in df.iterrows():
-            st.markdown('<div class="match-card">', unsafe_allow_html=True)
-            c1, c2, c3 = st.columns([2, 2, 1])
-            with c1:
-                conf = float(row.get('Best Confidence', 0))
-                conf_color = "#4ade80" if conf >= 0.75 else ("#fbbf24" if conf >= 0.55 else "#f87171")
-                st.markdown(
-                    f"**Match #{i + 1}** &nbsp;"
-                    f'<span class="pill info">{row["Video"][:20]}</span>',
-                    unsafe_allow_html=True
-                )
-                st.markdown(f"⏱ **{row['Start Time']}** → {row['End Time']}  |  {row['Duration']}")
-                st.markdown(
-                    f'Confidence: <span style="color:{conf_color}; font-weight:700;">'
-                    f'{conf:.3f}</span>',
-                    unsafe_allow_html=True
-                )
-                st.caption(
-                    f"Face: {float(row.get('Best Face', 0)):.3f}  |  "
-                    f"Pose: {float(row.get('Best Pose', 0)):.3f}"
-                )
-            with c2:
-                shot = row.get('Screenshot', '')
-                if shot and os.path.exists(str(shot)):
-                    try:
-                        img = cv2.imread(str(shot))
-                        rgb = bgr_to_rgb_safe(img)
-                        if rgb is not None:
-                            st.image(rgb, use_column_width=True)
-                    except Exception:
-                        st.warning("Preview unavailable")
-                else:
-                    st.info("No screenshot")
-            with c3:
-                if st.button(f"▶ Play", key=f"play_{i}", use_container_width=True):
-                    st.session_state.start_time_player = int(row.get('Start (sec)', 0))
-                    st.session_state.active_video_for_player = row['Video']
-                    st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+        if len(df) > 8:
+            for i, row in df.iterrows():
+                summary = (f"Match #{i + 1} — {str(row.get('Video', ''))[:24]} | "
+                           f"{row.get('Start Time', '')} → {row.get('End Time', '')} "
+                           f"({row.get('Duration', '')})")
+                with st.expander(summary, expanded=False):
+                    _render_match_card(row, i + 1)
+        else:
+            for i, row in df.iterrows():
+                _render_match_card(row, i + 1)
 
+    # ---- Confidence Graph tab ----
     with tab_graph:
         st.markdown("#### Confidence Over Time")
         chart_data = df.copy()
@@ -1092,22 +1343,21 @@ def render_results_step():
         ).configure(background='transparent').interactive(),
                         use_container_width=True)
 
+    # ---- Raw Data tab ----
     with tab_data:
         st.markdown("#### Raw Data Table")
         st.dataframe(df, use_container_width=True)
 
     st.markdown("---")
 
-    dl1, dl2, dl3 = st.columns(3)
-    with dl1:
+    # ISSUE 14: Downloads split into Reports + Video Evidence rows
+    st.markdown("### 📄 Reports")
+    r1, r2 = st.columns(2)
+    with r1:
         csv_bytes = df.to_csv(index=False).encode('utf-8')
         st.download_button("⬇️ CSV Report", csv_bytes, "report.csv", "text/csv",
                            use_container_width=True)
-    with dl2:
-        shots = [str(row.get('Screenshot', '')) for _, row in df.iterrows()]
-        st.download_button("⬇️ Evidence ZIP", make_zip_of_screenshots(shots),
-                           "evidence.zip", "application/zip", use_container_width=True)
-    with dl3:
+    with r2:
         if FPDF_AVAILABLE:
             pdf_bytes = generate_pdf_report(df, st.session_state.case_name)
             if pdf_bytes:
@@ -1118,25 +1368,63 @@ def render_results_step():
         else:
             st.caption("fpdf2 not installed — PDF unavailable.")
 
+    st.markdown("### 🎬 Video Evidence")
+    v1, v2, v3 = st.columns(3)
+    with v1:
+        shots = [str(row.get('Screenshot', '')) for _, row in df.iterrows()]
+        st.download_button("⬇️ Evidence ZIP", make_zip_of_files(shots),
+                           "evidence.zip", "application/zip", use_container_width=True)
+    with v2:
+        annot_paths = [p for p in annotated_videos.values() if p and os.path.exists(p)]
+        if annot_paths:
+            st.download_button("⬇️ Annotated Video ZIP", make_zip_of_files(annot_paths),
+                               "annotated_videos.zip", "application/zip",
+                               key="annot_zip_dl", use_container_width=True)
+        else:
+            st.caption("No annotated videos available.")
+    with v3:
+        if reel_path and os.path.exists(reel_path):
+            try:
+                with open(reel_path, 'rb') as f:
+                    reel_bytes = f.read()
+                st.download_button("⬇️ Highlight Reel", reel_bytes,
+                                   "highlight_reel.mp4", "video/mp4",
+                                   key="reel_bottom_dl", use_container_width=True)
+            except Exception:
+                st.caption("Highlight reel unavailable.")
+        else:
+            st.caption("No highlight reel available.")
+
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Video Player
+    # Video Player — prefers annotated clip; start_time_player stores source
+    # seconds, which is mapped through the stride when playing annotated output
     if st.session_state.start_time_player > 0:
         st.markdown('<div class="glass">', unsafe_allow_html=True)
+        active_name = st.session_state.active_video_for_player
         st.markdown(
-            f"#### ▶ Playback — `{st.session_state.active_video_for_player}` "
+            f"#### ▶ Playback — `{active_name}` "
             f"@ {fmt_time(st.session_state.start_time_player)}"
         )
 
         vid_path = None
-        if st.session_state.active_video_for_player in st.session_state.video_names:
-            idx      = st.session_state.video_names.index(st.session_state.active_video_for_player)
+        seek_sec = st.session_state.start_time_player
+        annotated_path = annotated_videos.get(active_name, "")
+        if annotated_path and os.path.exists(annotated_path):
+            stride = max(1, int(st.session_state.get('skip_frames', 0)) + 1)
+            vid_path = annotated_path
+            seek_sec = int(st.session_state.start_time_player / stride)
+        elif active_name in st.session_state.video_names:
+            idx = st.session_state.video_names.index(active_name)
             vid_path = st.session_state.video_files[idx]
         elif st.session_state.single_video_path:
             vid_path = st.session_state.single_video_path
 
         if vid_path and os.path.exists(vid_path):
-            st.video(vid_path, start_time=st.session_state.start_time_player)
+            try:
+                st.video(vid_path, start_time=seek_sec)
+            except Exception:
+                st.warning("Playback unavailable (codec not supported by browser).")
         else:
             st.error("Video file not found in session — it may have been cleaned up.")
 
@@ -1146,8 +1434,6 @@ def render_results_step():
         st.markdown('</div>', unsafe_allow_html=True)
 
     if st.button("🔄 Start New Analysis", use_container_width=False):
-        # ISSUE 7: best-effort cleanup of this session's temp artifacts (same
-        # treatment as the sidebar "New Case" button)
         cleanup_case_artifacts()
         for k, v in _DEFAULTS.items():
             st.session_state[k] = v

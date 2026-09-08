@@ -19,10 +19,11 @@ An AI-powered forensic video analysis tool that searches CCTV/surveillance foota
 ## 🗂️ Project Structure
 
 ```
-src/
+video-target-id/
 ├── app.py                  # Streamlit web app (main entry point)
 ├── face_module.py          # InsightFace wrapper (init, embedding, cosine sim)
 ├── pose_module.py          # MediaPipe pose embedding builder
+├── constants.py            # Shared constants (thresholds, weights, auth gate)
 ├── build_reference.py      # CLI: build a reference profile from a photo/video folder
 ├── search_cctv.py          # CLI: batch-scan a folder of CCTV videos
 ├── requirements.txt
@@ -51,7 +52,7 @@ src/
 ### 1. Clone the repo
 ```bash
 git clone https://github.com/your-username/video-target-id.git
-cd video-target-id/src
+cd video-target-id
 ```
 
 ### 2. Create a virtual environment (recommended)
@@ -133,7 +134,7 @@ Reference Photos
       └──────────────────────────────────────────────────────────┘
 ```
 
-**Default weights:** Face 0.7 · Pose 0.3 (adjustable in the sidebar at runtime).
+**Default weights:** Face 0.8 · Pose 0.2 (adjustable in the sidebar at runtime, face clamped to a minimum of 0.70).
 
 ---
 
@@ -145,7 +146,7 @@ Reference Photos
 | `FUSED_THR` | `0.48` | Minimum fused score to log a detection |
 | `CONSEC` | `3` | Consecutive matching frames required (reduces false alarms) |
 | `FRAME_STRIDE` | `3` | Analyze every Nth frame (CLI scripts) |
-| Detection threshold (UI) | `0.60` | Fused score threshold in the Streamlit app |
+| Detection threshold (UI) | `0.55` | Fused score threshold in the Streamlit app |
 
 ---
 
@@ -165,6 +166,19 @@ Reference Photos
 ## ⚠️ Legal & Ethical Notice
 
 This tool is intended for **authorized forensic and security use only**. Processing biometric data without the subject's consent or appropriate legal authority may be illegal in your jurisdiction. The app includes a mandatory authorization checkbox before any analysis begins. **You are solely responsible for ensuring lawful and ethical use.**
+
+---
+
+## 🔐 Data Handling
+
+Exported biometric profiles — `outputs/reference_profile.json` (CLI) and `.npz` profiles (the app's **Save Profile** button) — contain **raw face and pose embeddings of identifiable persons**. These files are written to disk **unencrypted** and are not protected by this tool.
+
+Operators must:
+- Store and access-control these files as **sensitive biometric data** under their own jurisdiction's legal obligations.
+- **Delete them** when no longer needed.
+- Never commit them to version control, email them, or place them on unprotected storage.
+
+This tool does not provide encryption-at-rest; if encryption is required, protect these files with your own mechanisms (e.g. encrypted volumes, OS-level file encryption) before or at the point of storage.
 
 ---
 
